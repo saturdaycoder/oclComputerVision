@@ -39,24 +39,18 @@ cv2.createTrackbar('punch', 'histeq', punchPos, punchMax, onPunchChanged)
 cv2.createTrackbar('clip', 'histeq', clip, clipMax, onClipChanged)
 
 cap = cv2.VideoCapture('video/HDR_outdoor_720P.mp4')
-ret, im = cap.read()
-#im = cv2.imread('images/under_exposure.jpg')
-im = cv2.resize(im, (1152, 768))
 
 while True:
-    im_new = histeq_global(im, alpha=alpha, punch=punch, clip=clip)
+    ret, im = cap.read()
+    if not ret:
+        print('end of video, reset to beginning')
+        frame_id = 0
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_id)
+        ret, im = cap.read()
+    #im = cv2.imread('images/under_exposure.jpg')
+    im = cv2.resize(im, (1280, 768))
 
-    '''
-    imFig, imAx = plt.subplots(2, 2, figsize=(25, 12))
-    imFig.tight_layout()
-    imAx[0, 0].imshow(cv2.cvtColor(im, cv2.COLOR_BGR2RGB))
-    imAx[0, 1].imshow(cv2.cvtColor(im_new, cv2.COLOR_BGR2RGB))
-    hist, _ = np.histogram(cv2.cvtColor(im, cv2.COLOR_BGR2GRAY), bins=256, range=(0,256))
-    hist_new, _ = np.histogram(cv2.cvtColor(im_new, cv2.COLOR_BGR2GRAY), bins=256, range=(0,256))
-    imAx[1, 0].bar(np.arange(len(hist)), hist)
-    imAx[1, 1].bar(np.arange(len(hist_new)), hist_new)
-    plt.show()
-    '''
+    im_new = histeq_global(im, alpha=alpha, punch=punch, clip=clip)
 
     disp = np.concatenate((im, im_new), axis=1)
 

@@ -2,14 +2,26 @@ import numpy as np
 import cv2
 from math import ceil, floor, sqrt
 import time
-import pyopencl as cl
+from histeq.eq_opencl import clHistEq
 import os
 import matplotlib.pyplot as plt
+import time
 
-def histeq_global(bgr, alpha=1, punch=0.05, clip=2):
+def histeq_global(bgr, alpha=1, punch=0.05, clip=2, use_gpu=True):
+    cleq = clHistEq.getInstance()
+
     ycrcb = cv2.cvtColor(bgr, cv2.COLOR_BGR2YCrCb)
     gray = ycrcb[:,:,0].copy()
-    hist, _ = np.histogram(gray, bins=256, range=(0, 256))
+
+    if use_gpu:
+        histGrid, evt = cleq.histGrid(gray)
+        evt.wait()
+        hist = histGrid.sum(axis=0).sum(axis=0)
+        histElapsed = (evt.profile.end - evt.profile.start)/1000000000
+    else:
+        hist, _ = np.histogram(gray, bins=256, range=(0, 256))
+
+    t1 = time.time()
     X = np.arange(0, len(hist))
 
     # CDF
@@ -30,27 +42,24 @@ def histeq_global(bgr, alpha=1, punch=0.05, clip=2):
     mapping[bright_punch:] = 255
     # blended region
     I = X
-    #I = (X - dark_punch) / (bright_punch - dark_punch) * 255
-    #I[:dark_punch] = 0
-    #I[bright_punch:] = 255
     mapping = alpha * cdf * 255 + (1-alpha) * I
     # clipping
     mapping = np.clip(mapping, 0, 255)
-    #plt.title('Transfer function')
-    #plt.plot(X, cdf * 255, color='green', label='CDF')
-    #plt.plot(X, I, color='red', label='I')
-    #plt.plot(X, mapping, color='blue', label='mapping')
-    #plt.legend()
-    #plt.xlabel('Original')
-    #plt.ylabel('Transferred')
-    #plt.show()
 
     # gain limiting with clip
     mapping = np.clip(mapping, I / clip, I * clip).astype(np.uint8)
 
-    eq = lambda t: mapping[t]
-    vfunc = np.vectorize(eq)
-    gray = vfunc(gray)
+    mapElapsed = time.time() - t1
+
+    if use_gpu:
+        gray, evt = cleq.histeqGlobal(gray, mapping)
+        evt.wait()
+        eqElapsed = (evt.profile.end - evt.profile.start)/1000000000
+        print('gpu histeqGlobal took {:.3f} + {:.3f} + {:.3f} ms'.format(histElapsed*1000, mapElapsed*1000, eqElapsed*1000))
+    else:
+        eq = lambda t: mapping[t]
+        vfunc = np.vectorize(eq)
+        gray = vfunc(gray)
 
     ycrcb[:,:,0] = gray
     return cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2BGR)
