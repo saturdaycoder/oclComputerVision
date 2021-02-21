@@ -24,6 +24,7 @@ class clHistEq:
                         self.clPrg = cl.Program(self.clCtx, kernSrc).build(options = ' -DHIST_BINS={} -DHIST_THREAD_NUM={} -DHIST_N={} '.format(self.histBins, self.histThreads, self.histBins // self.histThreads))
                         self.clKernHist = self.clPrg.hist
                         self.clKernHistEqGlobal = self.clPrg.histeq_global
+                        self.clKernHistEqLocalBlock = self.clPrg.histeq_local_block
 
     @classmethod
     def getInstance(cls):
@@ -51,11 +52,30 @@ class clHistEq:
         clImgIn = cl.Buffer(self.clCtx, mf.READ_ONLY | mf.USE_HOST_PTR, hostbuf=gray)
         npImgOut = gray.copy()
         clImgOut = cl.Buffer(self.clCtx, mf.READ_WRITE | mf.USE_HOST_PTR, hostbuf=npImgOut)
-        width = gray.shape[1]
-        height = gray.shape[0]
+        clWidth = np.int32(gray.shape[1])
+        clHeight = np.int32(gray.shape[0])
         clMapping = cl.Buffer(self.clCtx, mf.READ_ONLY | mf.USE_HOST_PTR, hostbuf=mapping)
-        clWidth = np.int32(width)
-        clHeight = np.int32(height)
+
         self.clKernHistEqGlobal.set_args(clImgIn, clWidth, clHeight, clImgOut, clMapping)
-        evt = cl.enqueue_nd_range_kernel(self.clQueue, self.clKernHistEqGlobal, (height, width), (16, 16), wait_for=wait_for)
+        evt = cl.enqueue_nd_range_kernel(self.clQueue, self.clKernHistEqGlobal, (clHeight, clWidth), (16, 16), wait_for=wait_for)
+
+        return npImgOut, evt
+
+    def histeqLocalBlock(self, gray, mappings, blockshape, wait_for=None):
+        mf = cl.mem_flags
+        clImgIn = cl.Buffer(self.clCtx, mf.READ_ONLY | mf.USE_HOST_PTR, hostbuf=gray)
+        npImgOut = gray.copy()
+        clWidth = np.int32(gray.shape[1])
+        clHeight = np.int32(gray.shape[0])
+        clImgOut = cl.Buffer(self.clCtx, mf.READ_WRITE | mf.USE_HOST_PTR, hostbuf=npImgOut)
+        clMappings = cl.Buffer(self.clCtx, mf.READ_ONLY | mf.USE_HOST_PTR, hostbuf=mappings.astype(np.float32))
+        clBlockWidth = np.int32(blockshape[1])
+        clBlockHeight = np.int32(blockshape[0])
+        clBlockNumX = np.int32(mappings.shape[1])
+        clBlockNumY = np.int32(mappings.shape[0])
+
+        self.clKernHistEqLocalBlock.set_args(clImgIn, clWidth, clHeight, clImgOut, clMappings, clBlockWidth, clBlockHeight, clBlockNumX, clBlockNumY)
+        evt = cl.enqueue_nd_range_kernel(self.clQueue, self.clKernHistEqLocalBlock, (clHeight, clWidth), (16, 16), wait_for=wait_for)
+        evt.wait()
+
         return npImgOut, evt

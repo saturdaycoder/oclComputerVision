@@ -5,37 +5,28 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 
-alpha = 0.5
-punch = 0.05
-clip = 3
-
 alphaMax = 100
-alphaPos = 50
+alphaPos = 30
 punchMax = 100
 punchPos = 5
+clip = 2
 clipMax = 10
 
 def onAlphaChanged(x):
-    global alpha
     global alphaPos
-    global alphaMax
     alphaPos = x
-    alpha = alphaPos / alphaMax
 
 def onPunchChanged(x):
-    global punch
     global punchPos
-    global punchMax
     punchPos = x
-    punch = punchPos / punchMax
 
 def onClipChanged(x):
     global clip
     clip = x
 
 cv2.namedWindow('histeq')
-cv2.createTrackbar('alpha', 'histeq', alphaPos, alphaMax, onAlphaChanged)
-cv2.createTrackbar('punch', 'histeq', punchPos, punchMax, onPunchChanged)
+cv2.createTrackbar('alpha(%)', 'histeq', alphaPos, alphaMax, onAlphaChanged)
+cv2.createTrackbar('punch(%)', 'histeq', punchPos, punchMax, onPunchChanged)
 cv2.createTrackbar('clip', 'histeq', clip, clipMax, onClipChanged)
 
 cap = cv2.VideoCapture('video/HDR_outdoor_720P.mp4')
@@ -50,7 +41,7 @@ while True:
     #im = cv2.imread('images/under_exposure.jpg')
     im = cv2.resize(im, (1280, 768))
 
-    im_new = histeq_global(im, alpha=alpha, punch=punch, clip=clip)
+    im_new = histeq_local_block(im, alpha=alphaPos/alphaMax, punch=punchPos/punchMax, clip=clip)
 
     disp = np.concatenate((im, im_new), axis=1)
 

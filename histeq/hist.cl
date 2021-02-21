@@ -99,3 +99,48 @@ __kernel void histeq_global(const __global uchar *pImgIn,
     uchar v = pImgIn[globaly * width + globalx];
     pImgOut[globaly * width + globalx] = pMapping[v];
 }
+
+__kernel void histeq_local_block(const __global uchar *pImgIn,
+                    const int width,
+                    const int height,
+                    __global uchar *pImgOut,
+                    const __global float *pMappingGrid,
+                    const int blockWidth,
+                    const int blockHeight,
+                    const int blockNumX,
+                    const int blockNumY)
+{
+    int y = get_global_id(0);
+    int x = get_global_id(1);
+
+    int b00idx = (x - blockWidth/2) / blockWidth;
+    int b00x = b00idx * blockWidth + blockWidth/2;
+    int b00idy = (y - blockHeight/2) / blockHeight;
+    int b00y = b00idy * blockHeight + blockHeight/2;
+    int b01idx = b00idx + 1;
+    int b01idy = b00idy;
+    int b10idx = b00idx;
+    int b10idy = b00idy + 1;
+
+    if (b01idx >= blockNumX)
+        b01idx = blockNumX - 1;
+    if (b10idy >= blockNumY)
+        b10idy = blockNumY - 1;
+
+    int b11idx = b01idx;
+    int b11idy = b10idy;
+
+    float s = (x - b00x) / (float)blockWidth;
+    float t = (y - b00y) / (float)blockHeight;
+
+    s = clamp(s, 0.0f, 1.0f);
+    t = clamp(t, 0.0f, 1.0f);
+
+    const __global float *pF00 = pMappingGrid + (b00idy * blockNumX + b00idx) * HIST_BINS;
+    const __global float *pF01 = pMappingGrid + (b01idy * blockNumX + b01idx) * HIST_BINS;
+    const __global float *pF10 = pMappingGrid + (b10idy * blockNumX + b10idx) * HIST_BINS;
+    const __global float *pF11 = pMappingGrid + (b11idy * blockNumX + b11idx) * HIST_BINS;
+
+    uchar v = pImgIn[y * width + x];
+    pImgOut[y * width + x] = clamp((1-s) * (1-t) * pF00[v] + s * (1-t) * pF01[v] + (1-s) * t * pF10[v] + s * t * pF11[v], 0.0f, 255.0f);
+}
