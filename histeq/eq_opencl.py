@@ -10,7 +10,7 @@ class clHistEq:
         self.histBins = 256
         self.histThreads = 32
         os.environ['PYOPENCL_COMPILER_OUTPUT'] = '1'
-        os.environ['PYOPENCL_NO_CACHE'] = '1'
+        #os.environ['PYOPENCL_NO_CACHE'] = '1'
         for p in cl.get_platforms():
             if 'AMD' in p.name:
                 devices = p.get_devices(device_type=cl.device_type.GPU)
@@ -23,6 +23,7 @@ class clHistEq:
                         kernSrc = f.read()
                         self.clPrg = cl.Program(self.clCtx, kernSrc).build(options = ' -DHIST_BINS={} -DHIST_THREAD_NUM={} -DHIST_N={} '.format(self.histBins, self.histThreads, self.histBins // self.histThreads))
                         self.clKernHist = self.clPrg.hist
+                        self.clKernHistSoft = self.clPrg.soft_hist_weighted
                         self.clKernHistEqGlobal = self.clPrg.histeq_global
                         self.clKernHistEqLocalBlock = self.clPrg.histeq_local_block
 
@@ -45,6 +46,25 @@ class clHistEq:
         clHeight = np.int32(height)
         self.clKernHist.set_args(clImgIn, clWidth, clHeight, clHistOut)
         evt = cl.enqueue_nd_range_kernel(self.clQueue, self.clKernHist, (height, width//self.histBins), (self.histThreads, 1), wait_for=wait_for)
+        return npHistOut, evt
+
+    def histGridSoftWeighted(self, gray, blockshape, wait_for=None):
+        mf = cl.mem_flags
+        clImgIn = cl.Buffer(self.clCtx, mf.READ_ONLY | mf.USE_HOST_PTR, hostbuf=gray)
+        width = gray.shape[1]
+        height = gray.shape[0]
+        blockW = blockshape[1]
+        blockH = blockshape[0]
+        groupw = width // self.histBins
+        grouph = height // 16
+        npHistOut = np.zeros((grouph + 16, groupw + 1, 4, self.histBins), dtype=np.float16)
+        clHistOut = cl.Buffer(self.clCtx, mf.READ_WRITE | mf.USE_HOST_PTR, hostbuf=npHistOut)
+        clWidth = np.int32(width)
+        clHeight = np.int32(height)
+        clBlockWidth = np.int32(blockW)
+        clBlockHeight = np.int32(blockH)
+        self.clKernHistSoft.set_args(clImgIn, clWidth, clHeight, clBlockWidth, clBlockHeight, clHistOut)
+        evt = cl.enqueue_nd_range_kernel(self.clQueue, self.clKernHistSoft, (height, width//self.histBins), (16, 1), wait_for=wait_for)
         return npHistOut, evt
 
     def histeqGlobal(self, gray, mapping, wait_for=None):

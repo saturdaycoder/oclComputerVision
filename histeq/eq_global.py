@@ -36,11 +36,8 @@ def calc_transfer_func(hist, alpha, punch, clip):
     mapping = np.clip(mapping, I / clip, I * clip)
     return mapping
 
-def histeq_global(bgr, alpha=1, punch=0.05, clip=2, use_gpu=True):
+def histeq_global(gray, alpha=1, punch=0.05, clip=2, use_gpu=True):
     cleq = clHistEq.getInstance()
-
-    ycrcb = cv2.cvtColor(bgr, cv2.COLOR_BGR2YCrCb)
-    gray = ycrcb[:,:,0].copy()
 
     if use_gpu:
         histGrid, evt = cleq.histGrid(gray)
@@ -58,11 +55,10 @@ def histeq_global(bgr, alpha=1, punch=0.05, clip=2, use_gpu=True):
         gray, evt = cleq.histeqGlobal(gray, mapping)
         evt.wait()
         eqElapsed = (evt.profile.end - evt.profile.start)/1000000000
-        print('GPU global histogram equalization took {:.3f} + {:.3f} + {:.3f} ms'.format(histElapsed*1000, mapElapsed*1000, eqElapsed*1000))
+        print('global histogram equalization took GPU: {:.3f} + {:.3f} ms, CPU: {:.3f} ms'.format(histElapsed*1000, eqElapsed*1000, mapElapsed*1000))
     else:
         eq = lambda t: mapping[t]
         vfunc = np.vectorize(eq)
         gray = vfunc(gray)
 
-    ycrcb[:,:,0] = gray
-    return cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2BGR)
+    return gray

@@ -7,13 +7,11 @@ import os
 from eq_opencl import clHistEq
 from eq_global import calc_transfer_func
 
-def histeq_local_block(bgr, alpha=0.5, punch=0.05, clip=3, blockshape=(256, 256), use_gpu=True):
+def histeq_local_block(gray, alpha=0.5, punch=0.05, clip=3, blockshape=(256, 256), use_gpu=True):
     blockW = blockshape[1]
     blockH = blockshape[0]
-    ycrcb = cv2.cvtColor(bgr, cv2.COLOR_BGR2YCrCb)
 
-    gray = ycrcb[:,:,0].copy()
-    mappings = np.zeros((bgr.shape[0]//blockH, bgr.shape[1]//blockW, 256), dtype=np.float32)
+    mappings = np.zeros((gray.shape[0]//blockH, gray.shape[1]//blockW, 256), dtype=np.float32)
 
     if use_gpu:
         cleq = clHistEq.getInstance()
@@ -22,16 +20,16 @@ def histeq_local_block(bgr, alpha=0.5, punch=0.05, clip=3, blockshape=(256, 256)
 
         # TODO: opencl to merge histogram and calculate transfer func
         t1 = time.time()
-        for i in range(0, bgr.shape[0]//blockH):
-            for j in range(0, bgr.shape[1]//blockW):
+        for i in range(0, gray.shape[0]//blockH):
+            for j in range(0, gray.shape[1]//blockW):
                 hist = histGrid[8*i, j]
                 for k in range(1, 8):
                     hist += histGrid[8*i+k, j]
                 mappings[i,j,:] = calc_transfer_func(hist, alpha, punch, clip).astype(np.float32)
         t2 = time.time()
     else:
-        for i in range(0, bgr.shape[0]//blockH):
-            for j in range(0, bgr.shape[1]//blockW):
+        for i in range(0, gray.shape[0]//blockH):
+            for j in range(0, gray.shape[1]//blockW):
                 hist, _ = np.histogram(gray[i*blockH:(i+1)*blockH,j*blockW:(j+1)*blockW], bins=256, range=(0, 256))
                 mappings[i,j,:] = calc_transfer_func(hist, alpha, punch, clip).astype(np.float32)
 
@@ -41,10 +39,10 @@ def histeq_local_block(bgr, alpha=0.5, punch=0.05, clip=3, blockshape=(256, 256)
         histElapsed = (evt0.profile.end - evt0.profile.start)/1000000000
         mapElapsed = t2 - t1
         eqElapsed = (evt2.profile.end - evt2.profile.start)/1000000000
-        print('GPU local histogram equalization (block-based) took {:.3f} + {:.3f} + {:.3f} ms'.format(histElapsed*1000, mapElapsed*1000, eqElapsed*1000))
+        print('local histogram equalization (block-based) took GPU: {:.3f} + {:.3f} ms, CPU: {:.3f} ms'.format(histElapsed*1000, eqElapsed*1000, mapElapsed*1000))
     else:
-        for i in range(0, bgr.shape[0]):
-            for j in range(0, bgr.shape[1]):
+        for i in range(0, gray.shape[0]):
+            for j in range(0, gray.shape[1]):
                 b00idx = int((j - blockW//2) / blockW)
                 b00x = b00idx * blockW + blockW//2
                 b00idy = int((i - blockH//2) / blockH)
@@ -54,9 +52,9 @@ def histeq_local_block(bgr, alpha=0.5, punch=0.05, clip=3, blockshape=(256, 256)
                 b10idx = b00idx
                 b10idy = b00idy + 1
 
-                if b01idx >= bgr.shape[1]//blockW:
+                if b01idx >= gray.shape[1]//blockW:
                     b01idx -= 1
-                if b10idy >= bgr.shape[0]//blockH:
+                if b10idy >= gray.shape[0]//blockH:
                     b10idy -= 1
 
                 b11idx = b01idx
@@ -79,7 +77,6 @@ def histeq_local_block(bgr, alpha=0.5, punch=0.05, clip=3, blockshape=(256, 256)
                 v1 = np.uint8((1-s) * (1-t) * f00[v] + s * (1-t) * f01[v] + (1-s) * t * f10[v] + s * t * f11[v])
                 gray[i, j] = np.uint8(v1)
 
-    ycrcb[:,:,0] = gray
-    return cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2BGR)
+    return gray
 
 
