@@ -1,3 +1,7 @@
+#if defined(cl_khr_fp16)
+#pragma OPENCL EXTENSION  cl_khr_fp16 : enable
+#endif
+
 #if HIST_N==2
     #define ushortN ushort2
     #define uintN uint2
@@ -68,8 +72,8 @@ __kernel void hist(const __global uchar *pImgIn,
     #pragma unroll
     for (int i = 0; i < HIST_BINS; ++i) {
         int gray_y = groupy * HIST_THREAD_NUM + localy;
-        int gray_x = groupx * HIST_BINS + localx;
-        uchar gray = pImgIn[gray_y * width + gray_x + i];
+        int gray_x = groupx * HIST_BINS + localx + i;
+        uchar gray = pImgIn[gray_y * width + gray_x];
         hist[localy][gray] ++;
     }
     barrier(CLK_LOCAL_MEM_FENCE);
@@ -86,6 +90,142 @@ __kernel void hist(const __global uchar *pImgIn,
         acc += v;
     }
     vstoreN(acc, localy * HIST_N, pHistOut);
+}
+
+__kernel void soft_hist_weighted(const __global uchar *pImgIn,
+                    const int width,
+                    const int height,
+                    const int blockWidth,
+                    const int blockHeight,
+                    __global half *pHistOut)
+{
+    /* assume 16x1 work items per work group */
+    /* each thread collects one row (256 cols) */
+    int globaly = get_global_id(0);
+    int globalx = get_global_id(1);
+    int globalh = get_global_size(0);
+    int globalw = get_global_size(1);
+    int localy = get_local_id(0);
+    int localx = get_local_id(1);
+    int localh = get_local_size(0);
+    int localw = get_local_size(1);
+    int groupy = get_group_id(0);
+    int groupx = get_group_id(1);
+    int grouph = get_num_groups(0);
+    int groupw = get_num_groups(1);
+
+    int b00idx = groupx;
+    int b00idy = groupy / 16;
+    int b00x = b00idx * blockWidth;
+    int b00y = b00idy * blockHeight;
+    //int b01idx = b00idx + 1;
+    //int b01idy = b00idy;
+    //int b10idx = b00idx;
+    //int b10idy = b00idy + 1;
+    //int b11idx = b01idx;
+    //int b11idy = b10idy;
+
+    // RB
+    __global half *pghist00 = pHistOut + ((globaly * groupw + groupx) * 4 + 3) * HIST_BINS;
+    // LB
+    __global half *pghist01 = pHistOut + ((globaly * groupw + groupx) * 4 + 2) * HIST_BINS;
+    // RT
+    __global half *pghist10 = pHistOut + ((globaly * groupw + groupx) * 4 + 1) * HIST_BINS;
+    // LT
+    __global half *pghist11 = pHistOut + ((globaly * groupw + groupx) * 4) * HIST_BINS;
+
+    /* up to 32KiB local mem on AMD gfx902 */
+    /* TODO: check bank conflict */
+    __local half lhist00[16][HIST_BINS];
+    __local half lhist01[16][HIST_BINS];
+    __local half lhist10[16][HIST_BINS];
+    __local half lhist11[16][HIST_BINS];
+
+    /* memset */
+    #pragma unroll
+    for (int i = 0; i < HIST_BINS; ++i) {
+        lhist00[localy][i] = 0;
+        lhist01[localy][i] = 0;
+        lhist10[localy][i] = 0;
+        lhist11[localy][i] = 0;
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    #pragma unroll
+    for (int i = 0; i < HIST_BINS; ++i) {
+        int gray_y = groupy * 16 + localy;
+        int gray_x = groupx * HIST_BINS + localx + i;
+        half s = (gray_x - b00x) / (half)blockWidth;
+        half t = (gray_y - b00y) / (half)blockHeight;
+        half dist00 = sqrt(pow(1-s,2)+pow(1-t,2));
+        half dist01 = sqrt(pow(s,2)+pow(1-t,2));
+        half dist10 = sqrt(pow(1-s,2)+pow(t,2));
+        half dist11 = sqrt(pow(s,2)+pow(t,2));
+        uchar gray = pImgIn[gray_y * width + gray_x];
+        lhist00[localy][gray] += dist00;
+        lhist01[localy][gray] += dist01;
+        lhist10[localy][gray] += dist10;
+        lhist11[localy][gray] += dist11;
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    /* accumulate histogram for the whole patch */
+    #if 1
+    half16 acc00 = 0;
+    half16 acc01 = 0;
+    half16 acc10 = 0;
+    half16 acc11 = 0;
+    #pragma unroll
+    for (int i = 0; i < 16; ++i) {
+        __local half *plocal = &lhist00[i][localy * 16];
+        half16 v = vload16(0, plocal);
+        acc00 += v;
+
+        plocal = &lhist01[i][localy * 16];
+        v = vload16(0, plocal);
+        acc01 += v;
+
+        plocal = &lhist10[i][localy * 16];
+        v = vload16(0, plocal);
+        acc10 += v;
+
+        plocal = &lhist11[i][localy * 16];
+        v = vload16(0, plocal);
+        acc11 += v;
+    }
+    vstore16(acc00, localy * 16, pghist00);
+    vstore16(acc01, localy * 16, pghist01);
+    vstore16(acc10, localy * 16, pghist10);
+    vstore16(acc11, localy * 16, pghist11);
+    #else
+    if (localx == 0 && localy == 0) {
+        for (int i = 0; i < HIST_BINS; ++i) {
+            half acc = 0;
+            for (int j = 0; j < 16; ++j) {
+                acc += lhist00[j][i];
+            }
+            pghist00[i] = acc;
+
+            acc = 0;
+            for (int j = 0; j < 16; ++j) {
+                acc += lhist01[j][i];
+            }
+            pghist01[i] = acc;
+
+            acc = 0;
+            for (int j = 0; j < 16; ++j) {
+                acc += lhist10[j][i];
+            }
+            pghist10[i] = acc;
+
+            acc = 0;
+            for (int j = 0; j < 16; ++j) {
+                acc += lhist11[j][i];
+            }
+            pghist11[i] = acc;
+        }
+    }
+    #endif
 }
 
 __kernel void histeq_global(const __global uchar *pImgIn,
