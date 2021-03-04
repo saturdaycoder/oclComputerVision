@@ -48,7 +48,7 @@ def WSAD(p0, p1, sigma=2.0):
     return (float)(np.sum(diffabsolute))
 
 visualizeSearch = False
-def get_displacement(patch, searchRegion):
+def get_displacement(patch, searchRegion, step):
     if searchRegion.shape[0] < patch.shape[0] or searchRegion.shape[1] < patch.shape[1]:
         return 0, 0
     
@@ -65,8 +65,8 @@ def get_displacement(patch, searchRegion):
         cv2.waitKey(1)
     # visualize <<<<<<<
 
-    for row in range(0, searchRegion.shape[0], patch.shape[1]):
-        for col in range(0, searchRegion.shape[1], patch.shape[1]):
+    for row in range(0, searchRegion.shape[0] + 1 - patch.shape[0], step):
+        for col in range(0, searchRegion.shape[1] + 1 - patch.shape[1], step):
             sad = SAD(patch, searchRegion[row:row+patch.shape[0], col:col+patch.shape[1]])
             if sad < minSAD:
                 minSAD = sad
@@ -86,7 +86,7 @@ def get_displacement(patch, searchRegion):
     assert (minPos[0] >= 0 and minPos[1] >= 0)
     return minPos[0] - searchCenter[0], minPos[1] - searchCenter[1]
 
-def get_region(im, T, B, L, R, size):
+def get_region_padded(im, T, B, L, R, size):
     marginT = 0
     marginB = 0
     marginL = 0
@@ -126,30 +126,41 @@ def get_region(im, T, B, L, R, size):
     region = im[T:B, L:R]
     return cv2.copyMakeBorder(region, marginT, marginB, marginL, marginR, cv2.BORDER_CONSTANT, value=0)
 
-visualizeME = False
+visualizeME = True
 def estimate_motion_vector(gray0, gray1, searchSize=15, patchSize=5, seed=None, pyrScale=1):
     searchMargin = searchSize // 2
     patchMargin = patchSize // 2
-    searchBlockSize = searchSize
+    #searchBlockSize = searchSize
 
     if seed is None:
         mv = np.zeros((gray0.shape[0], gray0.shape[1], 2), dtype=np.float32)
     else:
         mv = seed.copy()
 
-    for row in range(0, gray0.shape[0]-patchSize):
-        for col in range(0, gray0.shape[1]-patchSize):
-            patch = gray0[row:row+patchSize, col:col+patchSize]
-            T = row + int(mv[row, col, 0]) - searchMargin + patchMargin
-            L = col + int(mv[row, col, 1]) - searchMargin + patchMargin
-            R = L + searchBlockSize
-            B = T + searchBlockSize
+    for row in range(0, gray0.shape[0]):
+        for col in range(0, gray0.shape[1]):
+            patch = get_region_padded(gray0, row-patchMargin, row+patchMargin+1, col-patchMargin, col+patchMargin+1, patchSize)
+            centerX = col + int(mv[row, col, 0])
+            centerY = row + int(mv[row, col, 1])
 
-            searchRegion = get_region(gray1, T, B, L, R, searchBlockSize)
-            d = get_displacement(patch, searchRegion)
+            step = searchMargin - patchMargin
+            while step >= 1:
+                stepBlockSize = patchSize + step * 2
+                T = centerY - stepBlockSize // 2
+                B = centerY + stepBlockSize // 2 + 1
+                L = centerX - stepBlockSize // 2
+                R = centerX + stepBlockSize // 2 + 1
+                searchRegion = get_region_padded(gray1, T, B, L, R, stepBlockSize)
+                d = get_displacement(patch, searchRegion, step)
+                centerX += d[1]
+                centerY += d[0]
+                step = step//2
 
+            d = centerY - row, centerX - col
+
+            '''
             # visualize ME >>>>>>>
-            if visualizeME:
+            if False:
                 scale = 3
                 # search bounding box
                 bgr0 = cv2.cvtColor(gray0, cv2.COLOR_GRAY2BGR)
@@ -181,6 +192,7 @@ def estimate_motion_vector(gray0, gray1, searchSize=15, patchSize=5, seed=None, 
                 cv2.imshow("ME", disp)
                 cv2.waitKey()
             # visualize ME <<<<<<<
+            '''
 
             mv[row, col, 0] += d[1]
             mv[row, col, 1] += d[0]

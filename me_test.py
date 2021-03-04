@@ -70,6 +70,9 @@ mv_gt = read_flo('images/flow10.flo')
 write_flo(mv_gt, 'test.flo')
 show_mv('Grond-truth', mv_gt)
 
+flowS2D = cv2.optflow.calcOpticalFlowSparseToDense(gray0, gray1)
+show_mv('Flow-Sparse2Dense', flowS2D)
+
 pyr0 = gaussian_pyramid(gray0, 2, 3)
 pyr1 = gaussian_pyramid(gray1, 2, 3)
 
