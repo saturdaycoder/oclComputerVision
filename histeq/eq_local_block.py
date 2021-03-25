@@ -15,8 +15,7 @@ def histeq_local_block(gray, alpha=0.5, punch=0.05, clip=3, blockshape=(256, 256
 
     if use_gpu:
         cleq = clHistEq.getInstance()
-        histGrid, evt0 = cleq.histGrid(gray)
-        evt0.wait()
+        histGrid, elapsed1 = cleq.histGrid(gray)
 
         # TODO: opencl to merge histogram and calculate transfer func
         t1 = time.time()
@@ -34,11 +33,10 @@ def histeq_local_block(gray, alpha=0.5, punch=0.05, clip=3, blockshape=(256, 256
                 mappings[i,j,:] = calc_transfer_func(hist, alpha, punch, clip).astype(np.float32)
 
     if use_gpu:
-        gray, evt2 = cleq.histeqLocalBlock(gray, mappings, blockshape)
-        evt2.wait()
-        histElapsed = (evt0.profile.end - evt0.profile.start)/1000000000
+        gray, elapsed2 = cleq.histeqLocalBlock(gray, mappings, blockshape)
+        histElapsed = elapsed1 / 1000
         mapElapsed = t2 - t1
-        eqElapsed = (evt2.profile.end - evt2.profile.start)/1000000000
+        eqElapsed = elapsed2 / 1000
         print('local histogram equalization (block-based) took GPU: {:.3f} + {:.3f} ms, CPU: {:.3f} ms'.format(histElapsed*1000, eqElapsed*1000, mapElapsed*1000))
     else:
         for i in range(0, gray.shape[0]):

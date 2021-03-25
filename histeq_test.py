@@ -1,6 +1,5 @@
 from histeq.eq_global import histeq_global
 from histeq.eq_local_block import histeq_local_block
-from histeq.eq_local_corner import histeq_local_corner
 import cv2
 import numpy as np
 import time, os, sys
@@ -65,14 +64,11 @@ def plotHist(img):
     B = img[:,:,0].copy()
     G = img[:,:,1].copy()
     R = img[:,:,2].copy()
-    histGrid, evt = cleq.histGrid(B)
-    evt.wait()
+    histGrid, _ = cleq.histGrid(B)
     hist_B = histGrid.sum(axis=0).sum(axis=0)
-    histGrid, evt = cleq.histGrid(G)
-    evt.wait()
+    histGrid, _ = cleq.histGrid(G)
     hist_G = histGrid.sum(axis=0).sum(axis=0)
-    histGrid, evt = cleq.histGrid(R)
-    evt.wait()
+    histGrid, _ = cleq.histGrid(R)
     hist_R = histGrid.sum(axis=0).sum(axis=0)
     hist_height = 100
     hist_width = 256
@@ -128,8 +124,6 @@ while True:
         gray_new = histeq_global(gray, alpha=alphaPos/alphaMax, punch=punchPos/punchMax, clip=clip)
     elif algoId == 1:
         gray_new = histeq_local_block(gray, alpha=alphaPos/alphaMax, punch=punchPos/punchMax, clip=clip)
-    #elif algoId == 2:
-    #    gray_new = histeq_local_corner(gray, alpha=alphaPos/alphaMax, punch=punchPos/punchMax, clip=clip)
     else:
         gray_new = clahe.apply(gray)
     ycrcb[:,:,0] = gray_new
