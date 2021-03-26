@@ -6,6 +6,13 @@ from scipy.interpolate import interp2d
 from skimage.metrics import peak_signal_noise_ratio
 import time
 
+
+def get_elapsed_ms(ev_list):
+    elapsed = []
+    for e in ev_list:
+        elapsed.append((e.profile.end - e.profile.start) / 1000000)
+    return elapsed
+
 class clUtility:
     def __init__(self):
         os.environ['PYOPENCL_COMPILER_OUTPUT'] = '1'
@@ -27,85 +34,85 @@ class clUtility:
                         self.clKernBicubicLDS = self.clPrg.bicubic_lds
                         
 
-    def bilinear(self, im, shape):
-        w = im.shape[1]
-        h = im.shape[0]
-        wnew = shape[1]
-        hnew = shape[0]
+    def bilinear(self, src, dst):
+        w = src.shape[1]
+        h = src.shape[0]
+        wnew = dst.shape[1]
+        hnew = dst.shape[0]
         mf = cl.mem_flags
         fmt = cl.ImageFormat(cl.channel_order.BGRA, cl.channel_type.UNORM_INT8)
-        dst = np.zeros((hnew, wnew, im.shape[2]), dtype=np.uint8)
 
         clSrcImg = cl.Image(self.clCtx, mf.READ_ONLY, fmt, shape=(w, h))
         clDstImg = cl.Image(self.clCtx, mf.WRITE_ONLY, fmt, shape=(wnew, hnew))
         
         self.clKernBilinearSimple.set_args(clSrcImg, clDstImg)
-        ev0 = cl.enqueue_copy(self.clQueue, clSrcImg, im, origin=(0, 0), region=(w, h))
+        ev0 = cl.enqueue_copy(self.clQueue, clSrcImg, src, origin=(0, 0), region=(w, h))
         ev1 = cl.enqueue_nd_range_kernel(self.clQueue, self.clKernBilinearSimple, (wnew, hnew), None, wait_for=[ev0])
         ev2 = cl.enqueue_copy(self.clQueue, dst, clDstImg, origin=(0, 0), region=(wnew, hnew), wait_for=[ev1])
-        return dst, [ev0, ev1, ev2]
+        ev2.wait()
+        return get_elapsed_ms([ev0, ev1, ev2])
 
-    def bicubic(self, im, shape):
-        w = im.shape[1]
-        h = im.shape[0]
-        wnew = shape[1]
-        hnew = shape[0]
+    def bicubic(self, src, dst):
+        w = src.shape[1]
+        h = src.shape[0]
+        wnew = dst.shape[1]
+        hnew = dst.shape[0]
         mf = cl.mem_flags
         fmt = cl.ImageFormat(cl.channel_order.BGRA, cl.channel_type.UNORM_INT8)
-        dst = np.zeros((hnew, wnew, im.shape[2]), dtype=np.uint8)
-
+        
         clSrcImg = cl.Image(self.clCtx, mf.READ_ONLY, fmt, shape=(w, h))
         clDstImg = cl.Image(self.clCtx, mf.WRITE_ONLY, fmt, shape=(wnew, hnew))
         
         self.clKernBicubicSimple.set_args(clSrcImg, clDstImg)
-        ev0 = cl.enqueue_copy(self.clQueue, clSrcImg, im, origin=(0, 0), region=(w, h))
+        ev0 = cl.enqueue_copy(self.clQueue, clSrcImg, src, origin=(0, 0), region=(w, h))
         ev1 = cl.enqueue_nd_range_kernel(self.clQueue, self.clKernBicubicSimple, (wnew, hnew), None, wait_for=[ev0])
         ev2 = cl.enqueue_copy(self.clQueue, dst, clDstImg, origin=(0, 0), region=(wnew, hnew), wait_for=[ev1])
-        return dst, [ev0, ev1, ev2]
+        ev2.wait()
+        return get_elapsed_ms([ev0, ev1, ev2])
 
-    def bilinear_lds(self, im, shape):
-        w = im.shape[1]
-        h = im.shape[0]
-        wnew = shape[1]
-        hnew = shape[0]
+    def bilinear_lds(self, src, dst):
+        w = src.shape[1]
+        h = src.shape[0]
+        wnew = dst.shape[1]
+        hnew = dst.shape[0]
         mf = cl.mem_flags
         fmt = cl.ImageFormat(cl.channel_order.BGRA, cl.channel_type.UNORM_INT8)
-        dst = np.zeros((hnew, wnew, im.shape[2]), dtype=np.uint8)
-        
+
         clSrcImg = cl.Image(self.clCtx, mf.READ_ONLY, fmt, shape=(w, h))
         clDstImg = cl.Image(self.clCtx, mf.WRITE_ONLY, fmt, shape=(wnew, hnew))
 
         self.clKernBilinearLDS.set_args(clSrcImg, clDstImg)
-        ev0 = cl.enqueue_copy(self.clQueue, clSrcImg, im, origin=(0, 0), region=(w, h))
+        ev0 = cl.enqueue_copy(self.clQueue, clSrcImg, src, origin=(0, 0), region=(w, h))
         ev1 = cl.enqueue_nd_range_kernel(self.clQueue, self.clKernBilinearLDS, (wnew, hnew), (16, 16), wait_for=[ev0])
         ev2 = cl.enqueue_copy(self.clQueue, dst, clDstImg, origin=(0, 0), region=(wnew, hnew), wait_for=[ev1])
-        return dst, [ev0, ev1, ev2]
+        ev2.wait()
+        return get_elapsed_ms([ev0, ev1, ev2])
 
-    def bicubic_lds(self, im, shape):
-        w = im.shape[1]
-        h = im.shape[0]
-        wnew = shape[1]
-        hnew = shape[0]
+    def bicubic_lds(self, src, dst):
+        w = src.shape[1]
+        h = src.shape[0]
+        wnew = dst.shape[1]
+        hnew = dst.shape[0]
         mf = cl.mem_flags
         fmt = cl.ImageFormat(cl.channel_order.BGRA, cl.channel_type.UNORM_INT8)
-        dst = np.zeros((hnew, wnew, im.shape[2]), dtype=np.uint8)
-        
+
         clSrcImg = cl.Image(self.clCtx, mf.READ_ONLY, fmt, shape=(w, h))
         clDstImg = cl.Image(self.clCtx, mf.WRITE_ONLY, fmt, shape=(wnew, hnew))
 
         self.clKernBicubicLDS.set_args(clSrcImg, clDstImg)
-        ev0 = cl.enqueue_copy(self.clQueue, clSrcImg, im, origin=(0, 0), region=(w, h))
+        ev0 = cl.enqueue_copy(self.clQueue, clSrcImg, src, origin=(0, 0), region=(w, h))
         ev1 = cl.enqueue_nd_range_kernel(self.clQueue, self.clKernBicubicLDS, (wnew, hnew), (16, 16), wait_for=[ev0])
         ev2 = cl.enqueue_copy(self.clQueue, dst, clDstImg, origin=(0, 0), region=(wnew, hnew), wait_for=[ev1])
-        return dst, [ev0, ev1, ev2]
+        ev2.wait()
+        return get_elapsed_ms([ev0, ev1, ev2])
 
 if __name__ == '__main__':
 
     util = clUtility()
 
     bgr = cv2.imread('images/lenna.png')
-    w = 1024
-    h = 1024
+    w = 1280
+    h = 720
     wnew = 2 * w
     hnew = 2 * h
     bgr = cv2.resize(bgr, (w, h))
@@ -143,19 +150,17 @@ if __name__ == '__main__':
     count = 0
     profiling = None
     elapsed = 0
+    linearCl = np.zeros((hnew, wnew, bgra.shape[2]), dtype=np.uint8)
     while count < loopcount:
         t1 = time.time()
-        linearCl, ev_list = util.bilinear(bgra, (hnew, wnew))
+        elapsed_list = util.bilinear(bgra, linearCl)
         count += 1
-        cl.wait_for_events(ev_list)
         elapsed += time.time() - t1
         if profiling is None:
-            profiling = []
-            for e in ev_list:
-                profiling.append((e.profile.end - e.profile.start)/1000000)
+            profiling = elapsed_list
         else:
-            for i in range(len(ev_list)):
-                profiling[i] += (e.profile.end - e.profile.start)/1000000
+            for i in range(len(elapsed_list)):
+                profiling[i] += elapsed_list[i]
     psnrR = peak_signal_noise_ratio(linearCl[:,:,2], linear2d[:,:,2])
     psnrG = peak_signal_noise_ratio(linearCl[:,:,1], linear2d[:,:,1])
     psnrB = peak_signal_noise_ratio(linearCl[:,:,0], linear2d[:,:,0])
@@ -166,19 +171,17 @@ if __name__ == '__main__':
     count = 0
     profiling = None
     elapsed = 0
+    linearLDS = np.zeros((hnew, wnew, bgra.shape[2]), dtype=np.uint8)
     while count < loopcount:
         t1 = time.time()
-        linearLDS, ev_list = util.bilinear_lds(bgra, (hnew, wnew))
+        elapsed_list = util.bilinear_lds(bgra, linearLDS)
         count += 1
-        cl.wait_for_events(ev_list)
         elapsed += time.time() - t1
         if profiling is None:
-            profiling = []
-            for e in ev_list:
-                profiling.append((e.profile.end - e.profile.start)/1000000)
+            profiling = elapsed_list
         else:
-            for i in range(len(ev_list)):
-                profiling[i] += (e.profile.end - e.profile.start)/1000000
+            for i in range(len(elapsed_list)):
+                profiling[i] += elapsed_list[i]
     t2 = time.time()
     psnrR = peak_signal_noise_ratio(linearLDS[:,:,2], linear2d[:,:,2])
     psnrG = peak_signal_noise_ratio(linearLDS[:,:,1], linear2d[:,:,1])
@@ -214,19 +217,17 @@ if __name__ == '__main__':
     count = 0
     profiling = None
     elapsed = 0
+    cubicCl = np.zeros((hnew, wnew, bgra.shape[2]), dtype=np.uint8)
     while count < loopcount:
         t1 = time.time()
-        cubicCl, ev_list = util.bicubic(bgra, (hnew, wnew))
+        elapsed_list = util.bicubic(bgra, cubicCl)
         count += 1
-        cl.wait_for_events(ev_list)
         elapsed += time.time() - t1
         if profiling is None:
-            profiling = []
-            for e in ev_list:
-                profiling.append((e.profile.end - e.profile.start)/1000000)
+            profiling = elapsed_list
         else:
-            for i in range(len(ev_list)):
-                profiling[i] += (e.profile.end - e.profile.start)/1000000
+            for i in range(len(elapsed_list)):
+                profiling[i] += elapsed_list[i]
     psnrR = peak_signal_noise_ratio(cubicCl[:,:,2], cubic2d[:,:,2])
     psnrG = peak_signal_noise_ratio(cubicCl[:,:,1], cubic2d[:,:,1])
     psnrB = peak_signal_noise_ratio(cubicCl[:,:,0], cubic2d[:,:,0])
@@ -237,19 +238,17 @@ if __name__ == '__main__':
     count = 0
     profiling = None
     elapsed = 0
+    cubicLDS = np.zeros((hnew, wnew, bgra.shape[2]), dtype=np.uint8)
     while count < loopcount:
         t1 = time.time()
-        cubicLDS, ev_list = util.bicubic_lds(bgra, (hnew, wnew))
+        elapsed_list = util.bicubic_lds(bgra, cubicLDS)
         count += 1
-        cl.wait_for_events(ev_list)
         elapsed += time.time() - t1
         if profiling is None:
-            profiling = []
-            for e in ev_list:
-                profiling.append((e.profile.end - e.profile.start)/1000000)
+            profiling = elapsed_list
         else:
-            for i in range(len(ev_list)):
-                profiling[i] += (e.profile.end - e.profile.start)/1000000
+            for i in range(len(elapsed_list)):
+                profiling[i] += elapsed_list[i]
     t2 = time.time()
     psnrR = peak_signal_noise_ratio(cubicLDS[:,:,2], cubic2d[:,:,2])
     psnrG = peak_signal_noise_ratio(cubicLDS[:,:,1], cubic2d[:,:,1])
