@@ -1,32 +1,11 @@
 #pragma OPENCL EXTENSION  cl_khr_fp16 : enable
 
-typedef struct {
-    int left;
-    int top;
-    int right;
-    int bottom;
-} region_t;
-
 __constant half4 cubic_matrix[4]={
     (half4)(0, -1, 2, -1),
     (half4)(2, 0, -5, 3),
     (half4)(0, 1, 4, -3),
     (half4)(0, 0, -1, 1)
 };
-
-__inline float2 get_norm_coord(int2 coord, int2 size)
-{
-    return convert_float2(coord) / (float2)(size.x-1, size.y-1);
-}
-__inline region_t get_unnorm_region(float2 coord, int2 size)
-{
-    region_t ret_coord;
-    ret_coord.left = floor(coord.x * (size.x-1));
-    ret_coord.top = floor(coord.y * (size.y-1));
-    ret_coord.right = ceil(coord.x * (size.x-1));
-    ret_coord.bottom = ceil(coord.y * (size.y-1));
-    return ret_coord;
-}
 
 __kernel void bilinear_simple(read_only image2d_t src,
                             write_only image2d_t dst)
@@ -36,8 +15,7 @@ __kernel void bilinear_simple(read_only image2d_t src,
     int width_out = get_image_width(dst);
     int height_out = get_image_height(dst);
     int2 coord = (int2)(outx, outy);
-    int2 size = (int2)(width_out, height_out);
-    float2 norm_coord = get_norm_coord(coord, size);
+    float2 norm_coord = convert_float2(coord) / (float2)(width_out-1, height_out-1);
     sampler_t sampler = CLK_NORMALIZED_COORDS_TRUE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_LINEAR;
     float4 pix = read_imagef(src, sampler, norm_coord);
     write_imagef(dst, coord, pix);
@@ -56,9 +34,10 @@ __kernel void bicubic_simple(read_only image2d_t src,
     int2 dst_size = (int2)(width_out, height_out);
     int2 src_size = (int2)(width_in, height_in);
     sampler_t sampler = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST;
-    float2 norm_coord = get_norm_coord(coord, dst_size);
-    float2 coord_in = norm_coord * (float2)(width_in-1.0f, height_in-1.0f);
-    region_t region = get_unnorm_region(norm_coord, src_size);
+    float2 norm_coord = convert_float2(coord) / (float2)(width_out-1, height_out-1);
+    float2 coord_in = norm_coord * (float2)(width_in-1, height_in-1);
+    int x00 = floor(coord_in.x) - 1;
+    int y00 = floor(coord_in.y) - 1;
     half4 pix_dst = (half4)(0.0h, 0.0h, 0.0h, 0.0h);
 
     half u = coord_in.x - floor(coord_in.x);
@@ -86,7 +65,7 @@ __kernel void bicubic_simple(read_only image2d_t src,
     for (int i = 0; i < 4; ++ i) {
         #pragma unroll
         for (int j = 0; j < 4; ++ j) {
-            int2 sampler_coord = (int2)(region.left - 1 + j, region.top - 1 + i);
+            int2 sampler_coord = (int2)(x00 + j, y00 + i);
             half4 pix = convert_half4(read_imagef(src, sampler, sampler_coord));
             pix_dst += pix * xweight[j] * yweight[i];
         }
@@ -119,14 +98,14 @@ __kernel void bilinear_lds(read_only image2d_t src,
 
     /* load pixels into local memory */
     {
-        int2 coord_lt = (int2)(groupx * localw, groupy * localh);
-        region_t region_lt_in = get_unnorm_region(get_norm_coord(coord_lt, dst_size), src_size);
-        int2 coord_rb = (int2)((groupx + 1) * localw - 1, (groupy + 1) * localh - 1);
-        region_t region_rb_in = get_unnorm_region(get_norm_coord(coord_rb, dst_size), src_size);
-        xstart_in = region_lt_in.left;
-        ystart_in = region_lt_in.top;
-        xend_in = region_rb_in.right;
-        yend_in = region_rb_in.bottom;
+        int left = groupx * localw;
+        int top = groupy * localh;
+        int right = (groupx + 1) * localw - 1;
+        int bottom = (groupy + 1) * localh - 1;
+        xstart_in = floor((float)left / (width_out-1) * (width_in-1));
+        ystart_in = floor((float)top / (height_out-1) * (height_in-1));
+        xend_in = floor((float)right / (width_out-1) * (width_in-1)) + 1;
+        yend_in = floor((float)bottom / (height_out-1) * (height_in-1)) + 1;
 
         if (localx <= xend_in - xstart_in && localy <= yend_in - ystart_in) {
             int2 sampler_coord = (int2)(xstart_in + localx, ystart_in + localy);
@@ -136,16 +115,17 @@ __kernel void bilinear_lds(read_only image2d_t src,
     }
 
     int2 coord = (int2)(outx, outy);
-    float2 norm_coord = get_norm_coord(coord, dst_size);
-    region_t region_in = get_unnorm_region(norm_coord, src_size);
-    float2 coord_in = norm_coord * convert_float2(src_size);
-    half u = coord_in.x - region_in.left;
-    half v = coord_in.y - region_in.top;
+    float2 norm_coord = convert_float2(coord) / (float2)(width_out-1, height_out-1);
+    float2 coord_in = norm_coord * (float2)(width_in-1, height_in-1);
+    half u = coord_in.x - floor(coord_in.x);
+    half v = coord_in.y - floor(coord_in.y);
+    int xoff = floor(coord_in.x) - xstart_in;
+    int yoff = floor(coord_in.y) - ystart_in;
 
-    half4 pix00 = local_pix[region_in.top - ystart_in][region_in.left - xstart_in];
-    half4 pix01 = local_pix[region_in.top - ystart_in][region_in.right - xstart_in];
-    half4 pix10 = local_pix[region_in.bottom - ystart_in][region_in.left - xstart_in];
-    half4 pix11 = local_pix[region_in.bottom - ystart_in][region_in.right - xstart_in];
+    half4 pix00 = local_pix[yoff][xoff];
+    half4 pix01 = local_pix[yoff][xoff + 1];
+    half4 pix10 = local_pix[yoff + 1][xoff];
+    half4 pix11 = local_pix[yoff + 1][xoff + 1];
     half4 pixout = (1-u)*(1-v)*pix00 + u*(1-v)*pix01 + (1-u)*v*pix10 + u*v*pix11;
     write_imagef(dst, coord, convert_float4(pixout));
 }
@@ -177,14 +157,14 @@ __kernel void bicubic_lds(read_only image2d_t src,
     sampler_t sampler = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST;
     {
         /* load pixels into local memory */
-        int2 coord_lt = (int2)(groupx * localw, groupy * localh);
-        region_t region_lt_in = get_unnorm_region(get_norm_coord(coord_lt, dst_size), src_size);
-        int2 coord_rb = (int2)((groupx + 1) * localw - 1, (groupy + 1) * localh - 1);
-        region_t region_rb_in = get_unnorm_region(get_norm_coord(coord_rb, dst_size), src_size);
-        xstart_in = region_lt_in.left-1;
-        ystart_in = region_lt_in.top-1;
-        xend_in = region_rb_in.right+1;
-        yend_in = region_rb_in.bottom+1;
+        int left = groupx * localw;
+        int top = groupy * localh;
+        int right = (groupx + 1) * localw - 1;
+        int bottom = (groupy + 1) * localh - 1;
+        xstart_in = floor((float)left / (width_out-1) * (width_in-1)) - 1;
+        ystart_in = floor((float)top / (height_out-1) * (height_in-1)) - 1;
+        xend_in = floor((float)right / (width_out-1) * (width_in-1)) + 2;
+        yend_in = floor((float)bottom / (height_out-1) * (height_in-1)) + 2;
 
         if (localx <= xend_in - xstart_in && localy <= yend_in - ystart_in) {
             int2 sampler_coord = (int2)(xstart_in + localx, ystart_in + localy);
@@ -216,13 +196,8 @@ __kernel void bicubic_lds(read_only image2d_t src,
 
     barrier(CLK_LOCAL_MEM_FENCE);
 
-    int2 coord = (int2)(outx, outy);
-    float2 norm_coord = get_norm_coord(coord, dst_size);
-    region_t region_in = get_unnorm_region(norm_coord, src_size);
-    float2 coord_in = norm_coord * (float2)(width_in-1.0f, height_in-1.0f);
-    int xoff = region_in.left - 1 - xstart_in;
-    int yoff = region_in.top - 1 - ystart_in;
-
+    int xoff = floor((float)outx / (width_out-1) * (width_in-1)) - 1 - xstart_in;
+    int yoff = floor((float)outy / (height_out-1) * (height_in-1)) - 1 - ystart_in;
     half4 pix_dst = (half4)(0.0h, 0.0h, 0.0h, 0.0h);
 
     #pragma unroll
@@ -233,5 +208,5 @@ __kernel void bicubic_lds(read_only image2d_t src,
         }
     }
     pix_dst = clamp(pix_dst, 0.0h, 1.0h);
-    write_imagef(dst, coord, convert_float4(pix_dst));
+    write_imagef(dst, (int2)(outx, outy), convert_float4(pix_dst));
 }
