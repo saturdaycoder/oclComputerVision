@@ -111,8 +111,8 @@ if __name__ == '__main__':
     util = clUtility()
 
     bgr = cv2.imread('images/lenna.png')
-    w = 1280
-    h = 720
+    w = 1024
+    h = 1024
     wnew = 2 * w
     hnew = 2 * h
     bgr = cv2.resize(bgr, (w, h))

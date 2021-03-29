@@ -1,14 +1,19 @@
 #pragma OPENCL EXTENSION  cl_khr_fp16 : enable
 
-__constant sampler_t norm_linear_sampler = CLK_NORMALIZED_COORDS_TRUE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_LINEAR;
-__constant sampler_t fixed_sampler = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST;
-
 typedef struct {
     int left;
     int top;
     int right;
     int bottom;
 } region_t;
+
+__constant half4 cubic_matrix[4]={
+    (half4)(0, -1, 2, -1),
+    (half4)(2, 0, -5, 3),
+    (half4)(0, 1, 4, -3),
+    (half4)(0, 0, -1, 1)
+};
+
 __inline float2 get_norm_coord(int2 coord, int2 size)
 {
     return convert_float2(coord) / (float2)(size.x-1, size.y-1);
@@ -33,44 +38,11 @@ __kernel void bilinear_simple(read_only image2d_t src,
     int2 coord = (int2)(outx, outy);
     int2 size = (int2)(width_out, height_out);
     float2 norm_coord = get_norm_coord(coord, size);
-    float4 pix = read_imagef(src, norm_linear_sampler, norm_coord);
+    sampler_t sampler = CLK_NORMALIZED_COORDS_TRUE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_LINEAR;
+    float4 pix = read_imagef(src, sampler, norm_coord);
     write_imagef(dst, coord, pix);
 }
 
-#define A (-0.5h)
-__inline half8 cubic_weight_0_1(half8 x)
-{
-    return 1 - (A + 3) * pown(x, 2) + (A + 2) * pown(x, 3);
-}
-__inline half8 cubic_weight_1_2(half8 x)
-{
-    return -4 * A + 8 * A * x - 5 * A * pown(x, 2) + A * pown(x, 3);
-}
-__inline half16 get_cubic_weight(float2 coord)
-{
-    float2 uv = coord - floor(coord);
-    float u = uv.x;
-    float v = uv.y;
-    half16 u16 = (half16)(
-        1+u, u, 1-u, 2-u,
-        1+u, u, 1-u, 2-u,
-        1+u, u, 1-u, 2-u,
-        1+u, u, 1-u, 2-u
-    );
-    half16 v16 = (half16)(
-        1+v, 1+v, 1+v, 1+v,
-        v, v, v, v,
-        1-v, 1-v, 1-v, 1-v,
-        2-v, 2-v, 2-v, 2-v
-    );
-    half16 wu;
-    wu.s03478bcf = cubic_weight_1_2(u16.s03478bcf);
-    wu.s12569ade = cubic_weight_0_1(u16.s12569ade);
-    half16 wv;
-    wv.s0123cdef = cubic_weight_1_2(v16.s0123cdef);
-    wv.s456789ab = cubic_weight_0_1(v16.s456789ab);
-    return wu * wv;
-}
 __kernel void bicubic_simple(read_only image2d_t src,
                             write_only image2d_t dst)
 {
@@ -83,47 +55,43 @@ __kernel void bicubic_simple(read_only image2d_t src,
     int2 coord = (int2)(outx, outy);
     int2 dst_size = (int2)(width_out, height_out);
     int2 src_size = (int2)(width_in, height_in);
-    half4 pix[4][4];
+    sampler_t sampler = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST;
     float2 norm_coord = get_norm_coord(coord, dst_size);
     float2 coord_in = norm_coord * (float2)(width_in-1.0f, height_in-1.0f);
     region_t region = get_unnorm_region(norm_coord, src_size);
+    half4 pix_dst = (half4)(0.0h, 0.0h, 0.0h, 0.0h);
+
+    half u = coord_in.x - floor(coord_in.x);
+    half u2 = u * u;
+    half u3 = u2 * u;
+    half4 us = (half4)(1, u, u2, u3) * 0.5h;
+    half xweight[4] = {
+        dot(us, cubic_matrix[0]),
+        dot(us, cubic_matrix[1]),
+        dot(us, cubic_matrix[2]),
+        dot(us, cubic_matrix[3])
+    };
+    half v = coord_in.y - floor(coord_in.y);
+    half v2 = v * v;
+    half v3 = v2 * v;
+    half4 vs = (half4)(1, v, v2, v3) * 0.5h;
+    half yweight[4] = {
+        dot(vs, cubic_matrix[0]),
+        dot(vs, cubic_matrix[1]),
+        dot(vs, cubic_matrix[2]),
+        dot(vs, cubic_matrix[3])
+    };
 
     #pragma unroll
     for (int i = 0; i < 4; ++ i) {
         #pragma unroll
         for (int j = 0; j < 4; ++ j) {
             int2 sampler_coord = (int2)(region.left - 1 + j, region.top - 1 + i);
-            pix[i][j] = convert_half4(read_imagef(src, fixed_sampler, sampler_coord));
+            half4 pix = convert_half4(read_imagef(src, sampler, sampler_coord));
+            pix_dst += pix * xweight[j] * yweight[i];
         }
     }
-
-    half16 rs, gs, bs;
-    rs = (half16)(
-        pix[0][0].x, pix[0][1].x, pix[0][2].x, pix[0][3].x,
-        pix[1][0].x, pix[1][1].x, pix[1][2].x, pix[1][3].x,
-        pix[2][0].x, pix[2][1].x, pix[2][2].x, pix[2][3].x,
-        pix[3][0].x, pix[3][1].x, pix[3][2].x, pix[3][3].x
-    );
-    gs = (half16)(
-        pix[0][0].y, pix[0][1].y, pix[0][2].y, pix[0][3].y,
-        pix[1][0].y, pix[1][1].y, pix[1][2].y, pix[1][3].y,
-        pix[2][0].y, pix[2][1].y, pix[2][2].y, pix[2][3].y,
-        pix[3][0].y, pix[3][1].y, pix[3][2].y, pix[3][3].y
-    );
-    bs = (half16)(
-        pix[0][0].z, pix[0][1].z, pix[0][2].z, pix[0][3].z,
-        pix[1][0].z, pix[1][1].z, pix[1][2].z, pix[1][3].z,
-        pix[2][0].z, pix[2][1].z, pix[2][2].z, pix[2][3].z,
-        pix[3][0].z, pix[3][1].z, pix[3][2].z, pix[3][3].z
-    );
-    half16 w = get_cubic_weight(coord_in);
-    half4 pix_dst;
-    pix_dst.x = dot(w.s0123, rs.s0123) + dot(w.s4567, rs.s4567) + dot(w.s89ab, rs.s89ab) + dot(w.scdef, rs.scdef);
-    pix_dst.y = dot(w.s0123, gs.s0123) + dot(w.s4567, gs.s4567) + dot(w.s89ab, gs.s89ab) + dot(w.scdef, gs.scdef);
-    pix_dst.z = dot(w.s0123, bs.s0123) + dot(w.s4567, bs.s4567) + dot(w.s89ab, bs.s89ab) + dot(w.scdef, bs.scdef);
-    pix_dst.w = 1.0h;
     pix_dst = clamp(pix_dst, 0.0h, 1.0h);
-
     write_imagef(dst, coord, convert_float4(pix_dst));
 }
 
@@ -146,8 +114,8 @@ __kernel void bilinear_lds(read_only image2d_t src,
     int2 src_size = (int2)(width_in, height_in);
     int xstart_in, xend_in;
     int ystart_in, yend_in;
-
-    __local float4 local_pix[MAX_LOCAL_HEIGHT][MAX_LOCAL_WIDTH];
+    sampler_t sampler = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST;
+    __local half4 local_pix[20][20];
 
     /* load pixels into local memory */
     {
@@ -162,7 +130,7 @@ __kernel void bilinear_lds(read_only image2d_t src,
 
         if (localx <= xend_in - xstart_in && localy <= yend_in - ystart_in) {
             int2 sampler_coord = (int2)(xstart_in + localx, ystart_in + localy);
-            local_pix[localy][localx] = read_imagef(src, fixed_sampler, sampler_coord);
+            local_pix[localy][localx] = convert_half4(read_imagef(src, sampler, sampler_coord));
         }
         barrier(CLK_LOCAL_MEM_FENCE);
     }
@@ -171,14 +139,15 @@ __kernel void bilinear_lds(read_only image2d_t src,
     float2 norm_coord = get_norm_coord(coord, dst_size);
     region_t region_in = get_unnorm_region(norm_coord, src_size);
     float2 coord_in = norm_coord * convert_float2(src_size);
-    float u = coord_in.x - region_in.left;
-    float v = coord_in.y - region_in.top;
-    float4 pix00 = local_pix[region_in.top - ystart_in][region_in.left - xstart_in];
-    float4 pix01 = local_pix[region_in.top - ystart_in][region_in.right - xstart_in];
-    float4 pix10 = local_pix[region_in.bottom - ystart_in][region_in.left - xstart_in];
-    float4 pix11 = local_pix[region_in.bottom - ystart_in][region_in.right - xstart_in];
-    float4 pixout = (1-u)*(1-v)*pix00 + (1-u)*v*pix10 + u*(1-v)*pix01 + u*v*pix11;
-    write_imagef(dst, coord, pixout);
+    half u = coord_in.x - region_in.left;
+    half v = coord_in.y - region_in.top;
+
+    half4 pix00 = local_pix[region_in.top - ystart_in][region_in.left - xstart_in];
+    half4 pix01 = local_pix[region_in.top - ystart_in][region_in.right - xstart_in];
+    half4 pix10 = local_pix[region_in.bottom - ystart_in][region_in.left - xstart_in];
+    half4 pix11 = local_pix[region_in.bottom - ystart_in][region_in.right - xstart_in];
+    half4 pixout = (1-u)*(1-v)*pix00 + u*(1-v)*pix01 + (1-u)*v*pix10 + u*v*pix11;
+    write_imagef(dst, coord, convert_float4(pixout));
 }
 
 __kernel void bicubic_lds(read_only image2d_t src,
@@ -201,10 +170,13 @@ __kernel void bicubic_lds(read_only image2d_t src,
     int xstart_in, xend_in;
     int ystart_in, yend_in;
 
-    __local half4 local_pix[MAX_LOCAL_HEIGHT][MAX_LOCAL_WIDTH];
+    __local half4 l_pix[20][20];
+    __local half l_xweight[16][4];
+    __local half l_yweight[16][4];
 
-    /* load pixels into local memory */
+    sampler_t sampler = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST;
     {
+        /* load pixels into local memory */
         int2 coord_lt = (int2)(groupx * localw, groupy * localh);
         region_t region_lt_in = get_unnorm_region(get_norm_coord(coord_lt, dst_size), src_size);
         int2 coord_rb = (int2)((groupx + 1) * localw - 1, (groupy + 1) * localh - 1);
@@ -216,44 +188,50 @@ __kernel void bicubic_lds(read_only image2d_t src,
 
         if (localx <= xend_in - xstart_in && localy <= yend_in - ystart_in) {
             int2 sampler_coord = (int2)(xstart_in + localx, ystart_in + localy);
-            local_pix[localy][localx] = convert_half4(read_imagef(src, fixed_sampler, sampler_coord));
+            l_pix[localy][localx] = convert_half4(read_imagef(src, sampler, sampler_coord));
         }
-        barrier(CLK_LOCAL_MEM_FENCE);
+
+        /* calculate xweight into local memory */
+        if (localy < 4) {
+            int coordx = groupx * localw + localx;
+            half coordx_in = (half)coordx / (width_out - 1) * (width_in - 1);
+            half u = coordx_in - floor(coordx_in);
+            half u2 = u * u;
+            half u3 = u2 * u;
+            half4 us = (half4)(1, u, u2, u3) * 0.5h;
+            l_xweight[localx][localy] = dot(us, cubic_matrix[localy]);
+        }
+
+        /* calculate yweight into local memory */
+        if (localx < 4) {
+            int coordy = groupy * localh + localy;
+            half coordy_in = (half)coordy / (height_out - 1) * (height_in - 1);
+            half v = coordy_in - floor(coordy_in);
+            half v2 = v * v;
+            half v3 = v2 * v;
+            half4 vs = (half4)(1, v, v2, v3) * 0.5h;
+            l_yweight[localy][localx] = dot(vs, cubic_matrix[localx]);
+        }
     }
+
+    barrier(CLK_LOCAL_MEM_FENCE);
 
     int2 coord = (int2)(outx, outy);
     float2 norm_coord = get_norm_coord(coord, dst_size);
     region_t region_in = get_unnorm_region(norm_coord, src_size);
     float2 coord_in = norm_coord * (float2)(width_in-1.0f, height_in-1.0f);
-    half16 w = get_cubic_weight(coord_in);
     int xoff = region_in.left - 1 - xstart_in;
     int yoff = region_in.top - 1 - ystart_in;
 
-    half16 rs, gs, bs;
-    rs = (half16)(
-        local_pix[yoff+0][xoff+0].x, local_pix[yoff+0][xoff+1].x, local_pix[yoff+0][xoff+2].x, local_pix[yoff+0][xoff+3].x,
-        local_pix[yoff+1][xoff+0].x, local_pix[yoff+1][xoff+1].x, local_pix[yoff+1][xoff+2].x, local_pix[yoff+1][xoff+3].x,
-        local_pix[yoff+2][xoff+0].x, local_pix[yoff+2][xoff+1].x, local_pix[yoff+2][xoff+2].x, local_pix[yoff+2][xoff+3].x,
-        local_pix[yoff+3][xoff+0].x, local_pix[yoff+3][xoff+1].x, local_pix[yoff+3][xoff+2].x, local_pix[yoff+3][xoff+3].x
-    );
-    gs = (half16)(
-        local_pix[yoff+0][xoff+0].y, local_pix[yoff+0][xoff+1].y, local_pix[yoff+0][xoff+2].y, local_pix[yoff+0][xoff+3].y,
-        local_pix[yoff+1][xoff+0].y, local_pix[yoff+1][xoff+1].y, local_pix[yoff+1][xoff+2].y, local_pix[yoff+1][xoff+3].y,
-        local_pix[yoff+2][xoff+0].y, local_pix[yoff+2][xoff+1].y, local_pix[yoff+2][xoff+2].y, local_pix[yoff+2][xoff+3].y,
-        local_pix[yoff+3][xoff+0].y, local_pix[yoff+3][xoff+1].y, local_pix[yoff+3][xoff+2].y, local_pix[yoff+3][xoff+3].y
-    );
-    bs = (half16)(
-        local_pix[yoff+0][xoff+0].z, local_pix[yoff+0][xoff+1].z, local_pix[yoff+0][xoff+2].z, local_pix[yoff+0][xoff+3].z,
-        local_pix[yoff+1][xoff+0].z, local_pix[yoff+1][xoff+1].z, local_pix[yoff+1][xoff+2].z, local_pix[yoff+1][xoff+3].z,
-        local_pix[yoff+2][xoff+0].z, local_pix[yoff+2][xoff+1].z, local_pix[yoff+2][xoff+2].z, local_pix[yoff+2][xoff+3].z,
-        local_pix[yoff+3][xoff+0].z, local_pix[yoff+3][xoff+1].z, local_pix[yoff+3][xoff+2].z, local_pix[yoff+3][xoff+3].z
-    );
-    half4 pix_dst;
-    pix_dst.x = dot(w.s0123, rs.s0123) + dot(w.s4567, rs.s4567) + dot(w.s89ab, rs.s89ab) + dot(w.scdef, rs.scdef);
-    pix_dst.y = dot(w.s0123, gs.s0123) + dot(w.s4567, gs.s4567) + dot(w.s89ab, gs.s89ab) + dot(w.scdef, gs.scdef);
-    pix_dst.z = dot(w.s0123, bs.s0123) + dot(w.s4567, bs.s4567) + dot(w.s89ab, bs.s89ab) + dot(w.scdef, bs.scdef);
-    pix_dst.w = 1.0h;
-    pix_dst = clamp(pix_dst, 0.0h, 1.0h);
+    half4 pix_dst = (half4)(0.0h, 0.0h, 0.0h, 0.0h);
 
+    #pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        #pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            pix_dst += l_pix[yoff+i][xoff+j] * l_xweight[localx][j] * l_yweight[localy][i];
+        }
+    }
+    pix_dst = clamp(pix_dst, 0.0h, 1.0h);
     write_imagef(dst, coord, convert_float4(pix_dst));
 }
