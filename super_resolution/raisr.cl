@@ -14,151 +14,53 @@
 #define NUM_COHERENCE (3)
 #endif
 
-#ifndef NUM_PIXTYPE
-#define NUM_PIXTYPE (4)
-#endif
-
 #ifndef FILTER_LEN
 #define FILTER_LEN (11)
 #endif
 
-__constant half sobel_x[9] = {
-    -1.0h,  0.0h,  1.0h,
-    -2.0h,  0.0h,  2.0h,
-    -1.0h,  0.0h,  1.0h,
-};
-
-__constant half sobel_y[9] = {
-    -1.0h, -2.0h, -1.0h,
-     0.0h,  0.0h,  0.0h,
-     1.0h,  2.0h,  1.0h,
-};
-
-#if COLOR_BT601
-__constant half4 csc_y = (half4)(0.299h, 0.587h, 0.114h, 0.0h);
-__constant half4 csc_cb = (half4)(-0.14713h, -0.28886h, 0.436h, 0.5h);
-__constant half4 csc_cr = (half4)(0.615h, -0.51499h, 0.10001h, 0.5h);
-__constant half4 csc_r = (half4)(1.0h, 0.0h, 1.13983h, -1.13983h * 0.5h);
-__constant half4 csc_g = (half4)(1.0h, -0.39465h, -0.58060h, (0.39465h + 0.58060h) * 0.5h);
-__constant half4 csc_b = (half4)(1.0h, 2.03211h, 0.0h, -2.03211h * 0.5h);
-#elif COLOR_BT709
-__constant half4 csc_y = (half4)(0.2126h, 0.7152h, 0.0722h, 0.0h);
-__constant half4 csc_cb = (half4)(-0.09991h, -0.33609h, 0.436h, 0.5h);
-__constant half4 csc_cr = (half4)(0.615h, -0.55861h, 0.05639h, 0.5h);
-__constant half4 csc_r = (half4)(1.0h, 0.0h, 1.28033h, -1.28033h * 0.5h);
-__constant half4 csc_g = (half4)(1.0h, -0.21482h, -0.38059h, (0.21482h + 0.38059h) * 0.5h);
-__constant half4 csc_b = (half4)(1.0h, 2.12798h, 0.0h, -2.12798h * 0.5h);
+#ifndef WORK_GROUP_WIDTH
+#define WORK_GROUP_WIDTH (16)
 #endif
 
-__inline half conv3x3(const __local half *patch,
-              int patch_stride,
-              __constant half *pkernel)
-{
-    int row, col;
-    half out = 0.0;
-    #pragma unroll
-    for (row = 0; row < 3; ++row) {
-        #pragma unroll
-        for (col = 0; col < 3; ++col) {
-            /* rotate the conv kernel by 180 degree */
-            out += patch[row * patch_stride + col] * pkernel[(2-row) * 3 + (2-col)];
-        }
-    }
-    return out;
-}
+#ifndef WORK_GROUP_HEIGHT
+#define WORK_GROUP_HEIGHT (16)
+#endif
 
-__inline half4 sample_linear(read_only image2d_t src, float2 norm_coord)
-{
-    sampler_t sampler = CLK_NORMALIZED_COORDS_TRUE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_LINEAR;
-    return convert_half4(read_imagef(src, sampler, norm_coord));
-}
+#define LOCAL_PATCH_WIDTH ((FILTER_LEN>>1<<1) + WORK_GROUP_WIDTH)
+#define LOCAL_PATCH_HEIGHT ((FILTER_LEN>>1<<1) + WORK_GROUP_HEIGHT)
+#define LOCAL_GRAD_WIDTH ((FILTER_LEN>>1<<1) + WORK_GROUP_WIDTH - 2)
+#define LOCAL_GRAD_HEIGHT ((FILTER_LEN>>1<<1) + WORK_GROUP_HEIGHT - 2)
+#define GAUSS_LEN (FILTER_LEN - 2)
 
-#define A (-0.5h)
-__inline half8 cubic_weight_0_1(half8 x)
-{
-    return 1 - (A + 3) * pown(x, 2) + (A + 2) * pown(x, 3);
-}
-__inline half8 cubic_weight_1_2(half8 x)
-{
-    return -4 * A + 8 * A * x - 5 * A * pown(x, 2) + A * pown(x, 3);
-}
-__inline half16 get_cubic_weight(float2 coord)
-{
-    float2 uv = coord - floor(coord);
-    float u = uv.x;
-    float v = uv.y;
-    half16 u16 = (half16)(
-        1+u, u, 1-u, 2-u,
-        1+u, u, 1-u, 2-u,
-        1+u, u, 1-u, 2-u,
-        1+u, u, 1-u, 2-u
-    );
-    half16 v16 = (half16)(
-        1+v, 1+v, 1+v, 1+v,
-        v, v, v, v,
-        1-v, 1-v, 1-v, 1-v,
-        2-v, 2-v, 2-v, 2-v
-    );
-    half16 wu;
-    wu.s03478bcf = cubic_weight_1_2(u16.s03478bcf);
-    wu.s12569ade = cubic_weight_0_1(u16.s12569ade);
-    half16 wv;
-    wv.s0123cdef = cubic_weight_1_2(v16.s0123cdef);
-    wv.s456789ab = cubic_weight_0_1(v16.s456789ab);
-    return wu * wv;
-}
-__inline half4 sample_cubic(read_only image2d_t src, float2 norm_coord)
-{
-    half4 pix[4][4];
-    int srcw = get_image_width(src);
-    int srch = get_image_height(src);
-    float2 coord_in = norm_coord * (float2)(srcw-1.0f, srch-1.0f);
-    int sampx00 = floor(coord_in.x) - 1;
-    int sampy00 = floor(coord_in.y) - 1;
-    sampler_t sampler = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST;
-    #pragma unroll
-    for (int i = 0; i < 4; ++ i) {
-        #pragma unroll
-        for (int j = 0; j < 4; ++ j) {
-            pix[i][j] = convert_half4(read_imagef(src, sampler, (int2)(sampx00 + j, sampy00 + i)));
-        }
-    }
-    half16 rs, gs, bs;
-    rs = (half16)(
-        pix[0][0].x, pix[0][1].x, pix[0][2].x, pix[0][3].x,
-        pix[1][0].x, pix[1][1].x, pix[1][2].x, pix[1][3].x,
-        pix[2][0].x, pix[2][1].x, pix[2][2].x, pix[2][3].x,
-        pix[3][0].x, pix[3][1].x, pix[3][2].x, pix[3][3].x
-    );
-    gs = (half16)(
-        pix[0][0].y, pix[0][1].y, pix[0][2].y, pix[0][3].y,
-        pix[1][0].y, pix[1][1].y, pix[1][2].y, pix[1][3].y,
-        pix[2][0].y, pix[2][1].y, pix[2][2].y, pix[2][3].y,
-        pix[3][0].y, pix[3][1].y, pix[3][2].y, pix[3][3].y
-    );
-    bs = (half16)(
-        pix[0][0].z, pix[0][1].z, pix[0][2].z, pix[0][3].z,
-        pix[1][0].z, pix[1][1].z, pix[1][2].z, pix[1][3].z,
-        pix[2][0].z, pix[2][1].z, pix[2][2].z, pix[2][3].z,
-        pix[3][0].z, pix[3][1].z, pix[3][2].z, pix[3][3].z
-    );
-    half16 w = get_cubic_weight(coord_in);
-    half4 pix_dst;
-    pix_dst.x = dot(w.s0123, rs.s0123) + dot(w.s4567, rs.s4567) + dot(w.s89ab, rs.s89ab) + dot(w.scdef, rs.scdef);
-    pix_dst.y = dot(w.s0123, gs.s0123) + dot(w.s4567, gs.s4567) + dot(w.s89ab, gs.s89ab) + dot(w.scdef, gs.scdef);
-    pix_dst.z = dot(w.s0123, bs.s0123) + dot(w.s4567, bs.s4567) + dot(w.s89ab, bs.s89ab) + dot(w.scdef, bs.scdef);
-    pix_dst.w = 1.0h;
-    pix_dst = clamp(pix_dst, 0.0h, 1.0h);
-    return pix_dst;
-}
+__constant half4 cubic_matrix[4]={
+    (half4)(0, -1, 2, -1),
+    (half4)(2, 0, -5, 3),
+    (half4)(0, 1, 4, -3),
+    (half4)(0, 0, -1, 1)
+};
+
+#define IS_GRAY(chn_order) (chn_order == CLK_R)
+#define IS_RGBA(chn_order) (chn_order == CLK_RGBA || chn_order == CLK_BGRA || chn_order == CLK_ARGB)
+
+__constant sampler_t sampler = CLK_NORMALIZED_COORDS_TRUE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_LINEAR;
+#define LINEAR_SAMPLE(src, norm_coord) convert_half4(read_imagef(src, sampler, norm_coord))
+
+#define CONV3x3(patch, kern) \
+        (dot(patch[0], kern[2].s210) \
+        + dot(patch[1], kern[1].s210) \
+        + dot(patch[2], kern[0].s210))
 
 __kernel void raisr(read_only image2d_t src,
                     write_only image2d_t dst,
+                    const __global float *grad_x_matrix,
+                    const __global float *grad_y_matrix,
+                    const __global float *csc_rgba2yuva_matrix,
+                    const __global float *csc_yuva2rgba_matrix,
+                    const __global float *gaussian_weights,
+                    const __global float *strength_quantizers,
+                    const __global float *coherence_quantizers,
                     const int scale_factor,
-                    const __global float gaussian_weights[],
-                    const __global float strength_quantizers[],
-                    const __global float coherence_quantizers[],
-                    const __global float filters[NUM_ANGLE][NUM_STRENGTH][NUM_COHERENCE][NUM_PIXTYPE][FILTER_LEN * FILTER_LEN])
+                    const __global float *filters)
 {
     int dstx = get_global_id(0);
     int dsty = get_global_id(1);
@@ -172,16 +74,43 @@ __kernel void raisr(read_only image2d_t src,
     int srch = get_image_height(src);
     int dstw = get_image_width(dst);
     int dsth = get_image_height(dst);
+    int srcchn = get_image_channel_order(src);
+    int dstchn = get_image_channel_order(dst);
+    
+    __local half4 csc_rgba2yuva[4];
+    __local half4 csc_yuva2rgba[4];
+    __local half3 grad_kern_x[3];
+    __local half3 grad_kern_y[3];
+    
+    __local half y_patch[LOCAL_PATCH_HEIGHT][LOCAL_PATCH_WIDTH];
+    __local half cb_patch[LOCAL_PATCH_HEIGHT][LOCAL_PATCH_WIDTH];
+    __local half cr_patch[LOCAL_PATCH_HEIGHT][LOCAL_PATCH_WIDTH];
+    __local half grad[LOCAL_GRAD_HEIGHT][LOCAL_GRAD_WIDTH][2];
+    __local half gaussian[GAUSS_LEN][GAUSS_LEN];
 
-    __local half y_patch[26][26];
-    #if !IMAGE_GRAY
-        __local half cb_patch[26][26];
-        __local half cr_patch[26][26];
-    #endif
-    __local half grad[24][24][2];
-    __local half gaussian[9][9];
+    if (localx == 0 && localy == 0) {
+        if (IS_RGBA(srcchn)) {
+            csc_rgba2yuva[0] = convert_half4(vload4(0, csc_rgba2yuva_matrix));
+            csc_rgba2yuva[1] = convert_half4(vload4(1, csc_rgba2yuva_matrix));
+            csc_rgba2yuva[2] = convert_half4(vload4(2, csc_rgba2yuva_matrix));
+            csc_rgba2yuva[3] = convert_half4(vload4(3, csc_rgba2yuva_matrix));
+        }
+        if (IS_RGBA(dstchn)) {
+            csc_yuva2rgba[0] = convert_half4(vload4(0, csc_yuva2rgba_matrix));
+            csc_yuva2rgba[1] = convert_half4(vload4(1, csc_yuva2rgba_matrix));
+            csc_yuva2rgba[2] = convert_half4(vload4(2, csc_yuva2rgba_matrix));
+            csc_yuva2rgba[3] = convert_half4(vload4(3, csc_yuva2rgba_matrix));
+        }
+        grad_kern_x[0] = convert_half3(vload3(0, grad_x_matrix));
+        grad_kern_x[1] = convert_half3(vload3(1, grad_x_matrix));
+        grad_kern_x[2] = convert_half3(vload3(2, grad_x_matrix));
+        grad_kern_y[0] = convert_half3(vload3(0, grad_y_matrix));
+        grad_kern_y[1] = convert_half3(vload3(1, grad_y_matrix));
+        grad_kern_y[2] = convert_half3(vload3(2, grad_y_matrix));
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
 
-    if (localy < 13 && localx < 13) {
+    if (localy < LOCAL_PATCH_HEIGHT/2 && localx < LOCAL_PATCH_WIDTH/2) {
         int samp_offx = localw * groupx - FILTER_LEN / 2;
         int samp_offy = localh * groupy - FILTER_LEN / 2;
 
@@ -193,37 +122,52 @@ __kernel void raisr(read_only image2d_t src,
                 int sampx = patchx + samp_offx;
                 int sampy = patchy + samp_offy;
                 float2 norm_coord = convert_float2((int2)(sampx, sampy)) / (float2)(dstw-1.0f, dsth-1.0f);
-                half4 rgba_src = sample_linear(src, norm_coord);
+                half4 pix_src = LINEAR_SAMPLE(src, norm_coord);
 
-                #if IMAGE_GRAY
-                    y_patch[patchy][patchx] = rgba_src.x;
-                #else
-                    y_patch[patchy][patchx] = dot(csc_y, rgba_src);
-                    cb_patch[patchy][patchx] = dot(csc_cb, rgba_src);
-                    cr_patch[patchy][patchx] = dot(csc_cr, rgba_src);
-                #endif
+                if (IS_GRAY(srcchn)) {
+                    y_patch[patchy][patchx] = pix_src.x;
+                }
+                else if (IS_RGBA(srcchn)) {
+                    y_patch[patchy][patchx] = dot(csc_rgba2yuva[0], pix_src);
+                    cb_patch[patchy][patchx] = dot(csc_rgba2yuva[1], pix_src);
+                    cr_patch[patchy][patchx] = dot(csc_rgba2yuva[2], pix_src);
+                }
             }
         }
     }
 
-    if (localy < 9 && localx < 9) {
-        gaussian[localy][localx] = gaussian_weights[localy * 9 + localx];
+    if (localy < GAUSS_LEN && localx < GAUSS_LEN) {
+        gaussian[localy][localx] = gaussian_weights[localy * GAUSS_LEN + localx];
     }
 
     barrier(CLK_LOCAL_MEM_FENCE);
 
-    if (localy < 12 && localx < 12) {
-        grad[2 * localy][2 * localx][0] = conv3x3(&y_patch[2 * localy][2 * localx], 26, sobel_x);
-        grad[2 * localy][2 * localx][1] = conv3x3(&y_patch[2 * localy][2 * localx], 26, sobel_y);
+    if (localy < LOCAL_GRAD_HEIGHT/2 && localx < LOCAL_GRAD_WIDTH/2) {
+        half3 grad_patch[3] = {
+            (half3)(y_patch[2*localy][2*localx], y_patch[2*localy][2*localx+1], y_patch[2*localy][2*localx+2]),
+            (half3)(y_patch[2*localy+1][2*localx], y_patch[2*localy+1][2*localx+1], y_patch[2*localy+1][2*localx+2]),
+            (half3)(y_patch[2*localy+2][2*localx], y_patch[2*localy+2][2*localx+1], y_patch[2*localy+2][2*localx+2]),
+        };
+        grad[2*localy][2*localx][0] = CONV3x3(grad_patch, grad_kern_x);
+        grad[2*localy][2*localx][1] = CONV3x3(grad_patch, grad_kern_y);
 
-        grad[2 * localy][2 * localx + 1][0] = conv3x3(&y_patch[2 * localy][2 * localx + 1], 26, sobel_x);
-        grad[2 * localy][2 * localx + 1][1] = conv3x3(&y_patch[2 * localy][2 * localx + 1], 26, sobel_y);
+        grad_patch[0] = (half3)(y_patch[2*localy][2*localx+1], y_patch[2*localy][2*localx+2], y_patch[2*localy][2*localx+3]);
+        grad_patch[1] = (half3)(y_patch[2*localy+1][2*localx+1], y_patch[2*localy+1][2*localx+2], y_patch[2*localy+1][2*localx+3]);
+        grad_patch[2] = (half3)(y_patch[2*localy+2][2*localx+1], y_patch[2*localy+2][2*localx+2], y_patch[2*localy+2][2*localx+3]);
+        grad[2*localy][2*localx+1][0] = CONV3x3(grad_patch, grad_kern_x);
+        grad[2*localy][2*localx+1][1] = CONV3x3(grad_patch, grad_kern_y);
 
-        grad[2 * localy + 1][2 * localx][0] = conv3x3(&y_patch[2 * localy + 1][2 * localx], 26, sobel_x);
-        grad[2 * localy + 1][2 * localx][1] = conv3x3(&y_patch[2 * localy + 1][2 * localx], 26, sobel_y);
+        grad_patch[0] = (half3)(y_patch[2*localy+1][2*localx], y_patch[2*localy+1][2*localx+1], y_patch[2*localy+1][2*localx+2]);
+        grad_patch[1] = (half3)(y_patch[2*localy+2][2*localx], y_patch[2*localy+2][2*localx+1], y_patch[2*localy+2][2*localx+2]);
+        grad_patch[2] = (half3)(y_patch[2*localy+3][2*localx], y_patch[2*localy+3][2*localx+1], y_patch[2*localy+3][2*localx+2]);
+        grad[2*localy+1][2*localx][0] = CONV3x3(grad_patch, grad_kern_x);
+        grad[2*localy+1][2*localx][1] = CONV3x3(grad_patch, grad_kern_y);
 
-        grad[2 * localy + 1][2 * localx + 1][0] = conv3x3(&y_patch[2 * localy + 1][2 * localx + 1], 26, sobel_x);
-        grad[2 * localy + 1][2 * localx + 1][1] = conv3x3(&y_patch[2 * localy + 1][2 * localx + 1], 26, sobel_y);
+        grad_patch[0] = (half3)(y_patch[2*localy+1][2*localx+1], y_patch[2*localy+1][2*localx+2], y_patch[2*localy+1][2*localx+3]);
+        grad_patch[1] = (half3)(y_patch[2*localy+2][2*localx+1], y_patch[2*localy+2][2*localx+2], y_patch[2*localy+2][2*localx+3]);
+        grad_patch[2] = (half3)(y_patch[2*localy+3][2*localx+1], y_patch[2*localy+3][2*localx+2], y_patch[2*localy+3][2*localx+3]);
+        grad[2*localy+1][2*localx+1][0] = CONV3x3(grad_patch, grad_kern_x);
+        grad[2*localy+1][2*localx+1][1] = CONV3x3(grad_patch, grad_kern_y);
     }
 
     barrier(CLK_LOCAL_MEM_FENCE);
@@ -283,36 +227,35 @@ __kernel void raisr(read_only image2d_t src,
 
     half4 pix_dst = (half4)(0.0h, 0.0h, 0.0h, 1.0h);
 
+    filters += angle_idx * NUM_STRENGTH * NUM_COHERENCE * num_pixel_type * FILTER_LEN * FILTER_LEN
+                + strength_idx * NUM_COHERENCE * num_pixel_type * FILTER_LEN * FILTER_LEN
+                + coherence_idx * num_pixel_type * FILTER_LEN * FILTER_LEN
+                + pixel_type * FILTER_LEN * FILTER_LEN;
     #pragma unroll
     for (int i = 0; i < FILTER_LEN; ++i) {
         #pragma unroll
         for (int j = 0; j < FILTER_LEN; ++j) {
-            pix_dst.x += y_patch[localy + i][localx + j] * filters[angle_idx][strength_idx][coherence_idx][pixel_type][i * FILTER_LEN + j];
-            #if !IMAGE_GRAY
-                pix_dst.y += cb_patch[localy + i][localx + j] * filters[angle_idx][strength_idx][coherence_idx][pixel_type][i * FILTER_LEN + j];
-                pix_dst.z += cr_patch[localy + i][localx + j] * filters[angle_idx][strength_idx][coherence_idx][pixel_type][i * FILTER_LEN + j];
-            #endif
+            pix_dst.x += y_patch[localy + i][localx + j] * filters[i * FILTER_LEN + j];
+            if (IS_RGBA(dstchn)) {
+                pix_dst.y += cb_patch[localy + i][localx + j] * filters[i * FILTER_LEN + j];
+                pix_dst.z += cr_patch[localy + i][localx + j] * filters[i * FILTER_LEN + j];
+            }
         }
     }
 
-    //pix_dst.x = y_patch[localy + 5][localx + 5];
-    //#if !IMAGE_GRAY
-    //    pix_dst.y = cb_patch[localy + 5][localx + 5];
-    //    pix_dst.z = cr_patch[localy + 5][localx + 5];
-    //#endif
-
-    pix_dst = clamp(pix_dst, 0.0f, 1.0f);
+    pix_dst = clamp(pix_dst, 0.0h, 1.0h);
     
-    #if IMAGE_GRAY
-        write_imagef(dst, (int2)(dstx, dsty), pix_dst);
-    #else
+    if (IS_GRAY(dstchn)) {
+        write_imagef(dst, (int2)(dstx, dsty), convert_float4(pix_dst));
+    }
+    else if (IS_RGBA(dstchn)) {
         half4 rgba_dst;
-        rgba_dst.x = dot(csc_r, pix_dst);
-        rgba_dst.y = dot(csc_g, pix_dst);
-        rgba_dst.z = dot(csc_b, pix_dst);
-        rgba_dst.w = 1.0f;
+        rgba_dst.x = dot(csc_yuva2rgba[0], pix_dst);
+        rgba_dst.y = dot(csc_yuva2rgba[1], pix_dst);
+        rgba_dst.z = dot(csc_yuva2rgba[2], pix_dst);
+        rgba_dst.w = 1.0h;
         write_imagef(dst, (int2)(dstx, dsty), convert_float4(rgba_dst));
-    #endif
+    }
 }
 
 
