@@ -32,18 +32,15 @@
 #define LOCAL_GRAD_HEIGHT ((FILTER_LEN>>1<<1) + WORK_GROUP_HEIGHT - 2)
 #define GAUSS_LEN (FILTER_LEN - 2)
 
-__constant half4 cubic_matrix[4]={
-    (half4)(0, -1, 2, -1),
-    (half4)(2, 0, -5, 3),
-    (half4)(0, 1, 4, -3),
-    (half4)(0, 0, -1, 1)
+__constant float4 cubic_matrix[4]={
+    (float4)(0, -1, 2, -1),
+    (float4)(2, 0, -5, 3),
+    (float4)(0, 1, 4, -3),
+    (float4)(0, 0, -1, 1)
 };
 
 #define IS_GRAY(chn_order) (chn_order == CLK_R)
 #define IS_RGBA(chn_order) (chn_order == CLK_RGBA || chn_order == CLK_BGRA || chn_order == CLK_ARGB)
-
-__constant sampler_t sampler = CLK_NORMALIZED_COORDS_TRUE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_LINEAR;
-#define LINEAR_SAMPLE(src, norm_coord) convert_half4(read_imagef(src, sampler, norm_coord))
 
 #define CONV3x3(patch, kern) \
         (dot(patch[0], kern[2].s210) \
@@ -77,39 +74,41 @@ __kernel void raisr(read_only image2d_t src,
     int srcchn = get_image_channel_order(src);
     int dstchn = get_image_channel_order(dst);
     
-    __local half4 csc_rgba2yuva[4];
-    __local half4 csc_yuva2rgba[4];
-    __local half3 grad_kern_x[3];
-    __local half3 grad_kern_y[3];
+    __local float4 csc_rgba2yuva[4];
+    __local float4 csc_yuva2rgba[4];
+    __local float3 grad_kern_x[3];
+    __local float3 grad_kern_y[3];
     
-    __local half y_patch[LOCAL_PATCH_HEIGHT][LOCAL_PATCH_WIDTH];
-    __local half cb_patch[LOCAL_PATCH_HEIGHT][LOCAL_PATCH_WIDTH];
-    __local half cr_patch[LOCAL_PATCH_HEIGHT][LOCAL_PATCH_WIDTH];
-    __local half grad[LOCAL_GRAD_HEIGHT][LOCAL_GRAD_WIDTH][2];
-    __local half gaussian[GAUSS_LEN][GAUSS_LEN];
+    __local float y_patch[LOCAL_PATCH_HEIGHT][LOCAL_PATCH_WIDTH];
+    __local float cb_patch[LOCAL_PATCH_HEIGHT][LOCAL_PATCH_WIDTH];
+    __local float cr_patch[LOCAL_PATCH_HEIGHT][LOCAL_PATCH_WIDTH];
+    __local float grad[LOCAL_GRAD_HEIGHT][LOCAL_GRAD_WIDTH][2];
+    __local float gaussian[GAUSS_LEN][GAUSS_LEN];
 
     if (localx == 0 && localy == 0) {
         if (IS_RGBA(srcchn)) {
-            csc_rgba2yuva[0] = convert_half4(vload4(0, csc_rgba2yuva_matrix));
-            csc_rgba2yuva[1] = convert_half4(vload4(1, csc_rgba2yuva_matrix));
-            csc_rgba2yuva[2] = convert_half4(vload4(2, csc_rgba2yuva_matrix));
-            csc_rgba2yuva[3] = convert_half4(vload4(3, csc_rgba2yuva_matrix));
+            csc_rgba2yuva[0] = convert_float4(vload4(0, csc_rgba2yuva_matrix));
+            csc_rgba2yuva[1] = convert_float4(vload4(1, csc_rgba2yuva_matrix));
+            csc_rgba2yuva[2] = convert_float4(vload4(2, csc_rgba2yuva_matrix));
+            csc_rgba2yuva[3] = convert_float4(vload4(3, csc_rgba2yuva_matrix));
         }
         if (IS_RGBA(dstchn)) {
-            csc_yuva2rgba[0] = convert_half4(vload4(0, csc_yuva2rgba_matrix));
-            csc_yuva2rgba[1] = convert_half4(vload4(1, csc_yuva2rgba_matrix));
-            csc_yuva2rgba[2] = convert_half4(vload4(2, csc_yuva2rgba_matrix));
-            csc_yuva2rgba[3] = convert_half4(vload4(3, csc_yuva2rgba_matrix));
+            csc_yuva2rgba[0] = convert_float4(vload4(0, csc_yuva2rgba_matrix));
+            csc_yuva2rgba[1] = convert_float4(vload4(1, csc_yuva2rgba_matrix));
+            csc_yuva2rgba[2] = convert_float4(vload4(2, csc_yuva2rgba_matrix));
+            csc_yuva2rgba[3] = convert_float4(vload4(3, csc_yuva2rgba_matrix));
         }
-        grad_kern_x[0] = convert_half3(vload3(0, grad_x_matrix));
-        grad_kern_x[1] = convert_half3(vload3(1, grad_x_matrix));
-        grad_kern_x[2] = convert_half3(vload3(2, grad_x_matrix));
-        grad_kern_y[0] = convert_half3(vload3(0, grad_y_matrix));
-        grad_kern_y[1] = convert_half3(vload3(1, grad_y_matrix));
-        grad_kern_y[2] = convert_half3(vload3(2, grad_y_matrix));
+        grad_kern_x[0] = convert_float3(vload3(0, grad_x_matrix));
+        grad_kern_x[1] = convert_float3(vload3(1, grad_x_matrix));
+        grad_kern_x[2] = convert_float3(vload3(2, grad_x_matrix));
+        grad_kern_y[0] = convert_float3(vload3(0, grad_y_matrix));
+        grad_kern_y[1] = convert_float3(vload3(1, grad_y_matrix));
+        grad_kern_y[2] = convert_float3(vload3(2, grad_y_matrix));
     }
     barrier(CLK_LOCAL_MEM_FENCE);
 
+    sampler_t direct_sampler = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST;
+    sampler_t norm_sampler = CLK_NORMALIZED_COORDS_TRUE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_LINEAR;
     if (localy < LOCAL_PATCH_HEIGHT/2 && localx < LOCAL_PATCH_WIDTH/2) {
         int samp_offx = localw * groupx - FILTER_LEN / 2;
         int samp_offy = localh * groupy - FILTER_LEN / 2;
@@ -121,8 +120,15 @@ __kernel void raisr(read_only image2d_t src,
                 int patchy = 2 * localy + i;
                 int sampx = patchx + samp_offx;
                 int sampy = patchy + samp_offy;
-                float2 norm_coord = convert_float2((int2)(sampx, sampy)) / (float2)(dstw-1.0f, dsth-1.0f);
-                half4 pix_src = LINEAR_SAMPLE(src, norm_coord);
+                float4 pix_src;
+
+                if (srcw == dstw && srch == dsth) {
+                    pix_src = read_imagef(src, direct_sampler, (int2)(sampx, sampy));
+                }
+                else {
+                    float2 norm_coord = convert_float2((int2)(sampx, sampy)) / (float2)(dstw-1, dsth-1);
+                    pix_src = read_imagef(src, norm_sampler, norm_coord);
+                }
 
                 if (IS_GRAY(srcchn)) {
                     y_patch[patchy][patchx] = pix_src.x;
@@ -143,39 +149,39 @@ __kernel void raisr(read_only image2d_t src,
     barrier(CLK_LOCAL_MEM_FENCE);
 
     if (localy < LOCAL_GRAD_HEIGHT/2 && localx < LOCAL_GRAD_WIDTH/2) {
-        half3 grad_patch[3] = {
-            (half3)(y_patch[2*localy][2*localx], y_patch[2*localy][2*localx+1], y_patch[2*localy][2*localx+2]),
-            (half3)(y_patch[2*localy+1][2*localx], y_patch[2*localy+1][2*localx+1], y_patch[2*localy+1][2*localx+2]),
-            (half3)(y_patch[2*localy+2][2*localx], y_patch[2*localy+2][2*localx+1], y_patch[2*localy+2][2*localx+2]),
+        float3 grad_patch[3] = {
+            (float3)(y_patch[2*localy][2*localx], y_patch[2*localy][2*localx+1], y_patch[2*localy][2*localx+2]),
+            (float3)(y_patch[2*localy+1][2*localx], y_patch[2*localy+1][2*localx+1], y_patch[2*localy+1][2*localx+2]),
+            (float3)(y_patch[2*localy+2][2*localx], y_patch[2*localy+2][2*localx+1], y_patch[2*localy+2][2*localx+2]),
         };
         grad[2*localy][2*localx][0] = CONV3x3(grad_patch, grad_kern_x);
         grad[2*localy][2*localx][1] = CONV3x3(grad_patch, grad_kern_y);
 
-        grad_patch[0] = (half3)(y_patch[2*localy][2*localx+1], y_patch[2*localy][2*localx+2], y_patch[2*localy][2*localx+3]);
-        grad_patch[1] = (half3)(y_patch[2*localy+1][2*localx+1], y_patch[2*localy+1][2*localx+2], y_patch[2*localy+1][2*localx+3]);
-        grad_patch[2] = (half3)(y_patch[2*localy+2][2*localx+1], y_patch[2*localy+2][2*localx+2], y_patch[2*localy+2][2*localx+3]);
+        grad_patch[0] = (float3)(y_patch[2*localy][2*localx+1], y_patch[2*localy][2*localx+2], y_patch[2*localy][2*localx+3]);
+        grad_patch[1] = (float3)(y_patch[2*localy+1][2*localx+1], y_patch[2*localy+1][2*localx+2], y_patch[2*localy+1][2*localx+3]);
+        grad_patch[2] = (float3)(y_patch[2*localy+2][2*localx+1], y_patch[2*localy+2][2*localx+2], y_patch[2*localy+2][2*localx+3]);
         grad[2*localy][2*localx+1][0] = CONV3x3(grad_patch, grad_kern_x);
         grad[2*localy][2*localx+1][1] = CONV3x3(grad_patch, grad_kern_y);
 
-        grad_patch[0] = (half3)(y_patch[2*localy+1][2*localx], y_patch[2*localy+1][2*localx+1], y_patch[2*localy+1][2*localx+2]);
-        grad_patch[1] = (half3)(y_patch[2*localy+2][2*localx], y_patch[2*localy+2][2*localx+1], y_patch[2*localy+2][2*localx+2]);
-        grad_patch[2] = (half3)(y_patch[2*localy+3][2*localx], y_patch[2*localy+3][2*localx+1], y_patch[2*localy+3][2*localx+2]);
+        grad_patch[0] = (float3)(y_patch[2*localy+1][2*localx], y_patch[2*localy+1][2*localx+1], y_patch[2*localy+1][2*localx+2]);
+        grad_patch[1] = (float3)(y_patch[2*localy+2][2*localx], y_patch[2*localy+2][2*localx+1], y_patch[2*localy+2][2*localx+2]);
+        grad_patch[2] = (float3)(y_patch[2*localy+3][2*localx], y_patch[2*localy+3][2*localx+1], y_patch[2*localy+3][2*localx+2]);
         grad[2*localy+1][2*localx][0] = CONV3x3(grad_patch, grad_kern_x);
         grad[2*localy+1][2*localx][1] = CONV3x3(grad_patch, grad_kern_y);
 
-        grad_patch[0] = (half3)(y_patch[2*localy+1][2*localx+1], y_patch[2*localy+1][2*localx+2], y_patch[2*localy+1][2*localx+3]);
-        grad_patch[1] = (half3)(y_patch[2*localy+2][2*localx+1], y_patch[2*localy+2][2*localx+2], y_patch[2*localy+2][2*localx+3]);
-        grad_patch[2] = (half3)(y_patch[2*localy+3][2*localx+1], y_patch[2*localy+3][2*localx+2], y_patch[2*localy+3][2*localx+3]);
+        grad_patch[0] = (float3)(y_patch[2*localy+1][2*localx+1], y_patch[2*localy+1][2*localx+2], y_patch[2*localy+1][2*localx+3]);
+        grad_patch[1] = (float3)(y_patch[2*localy+2][2*localx+1], y_patch[2*localy+2][2*localx+2], y_patch[2*localy+2][2*localx+3]);
+        grad_patch[2] = (float3)(y_patch[2*localy+3][2*localx+1], y_patch[2*localy+3][2*localx+2], y_patch[2*localy+3][2*localx+3]);
         grad[2*localy+1][2*localx+1][0] = CONV3x3(grad_patch, grad_kern_x);
         grad[2*localy+1][2*localx+1][1] = CONV3x3(grad_patch, grad_kern_y);
     }
 
     barrier(CLK_LOCAL_MEM_FENCE);
 
-    half ma = 0;
-    half mb = 0;
-    half mc = 0;
-    half md = 0;
+    float ma = 0;
+    float mb = 0;
+    float mc = 0;
+    float md = 0;
 
     #pragma unroll
     for (int i = 0; i < 9; ++i) {
@@ -183,8 +189,8 @@ __kernel void raisr(read_only image2d_t src,
         for (int j = 0; j < 9; ++j) {
             int row = i + localy;
             int col = j + localx;
-            half gx = grad[row][col][0];
-            half gy = grad[row][col][1];
+            float gx = grad[row][col][0];
+            float gy = grad[row][col][1];
             ma += gx * gy * gaussian[j][i];
             mb += gx * gy * gaussian[j][i];
             md += gy * gy * gaussian[j][i];
@@ -192,16 +198,16 @@ __kernel void raisr(read_only image2d_t src,
     }
     mc = mb;
 
-    half T = ma + md;
-    half D = ma * md - mb * mc;
-    half L1 = T/2 + sqrt( (T * T)/4 - D );
-    half L2 = T/2 - sqrt( (T * T)/4 - D );
+    float T = ma + md;
+    float D = ma * md - mb * mc;
+    float L1 = T/2 + sqrt( (T * T)/4 - D );
+    float L2 = T/2 - sqrt( (T * T)/4 - D );
 
-    half theta = atan2(mb, L1 - md);
+    float theta = atan2(mb, L1 - md);
     if (theta < 0)
         theta += PI;
 
-    half coherence = 0.0f;
+    float coherence = 0.0f;
     if (sqrt(L1) + sqrt(L2) != 0) {
         coherence = ( sqrt(L1) - sqrt(L2) ) / ( sqrt(L1) + sqrt(L2) );
     }
@@ -225,20 +231,25 @@ __kernel void raisr(read_only image2d_t src,
         }
     }
 
-    half4 pix_dst = (half4)(0.0h, 0.0h, 0.0h, 1.0h);
+    float4 pix_dst = (float4)(0.0h, 0.0h, 0.0h, 1.0h);
 
-    filters += angle_idx * NUM_STRENGTH * NUM_COHERENCE * num_pixel_type * FILTER_LEN * FILTER_LEN
+    #if 1
+    const __global float *pf = filters + angle_idx * NUM_STRENGTH * NUM_COHERENCE * num_pixel_type * FILTER_LEN * FILTER_LEN
                 + strength_idx * NUM_COHERENCE * num_pixel_type * FILTER_LEN * FILTER_LEN
                 + coherence_idx * num_pixel_type * FILTER_LEN * FILTER_LEN
                 + pixel_type * FILTER_LEN * FILTER_LEN;
+    #else
+    float pf[FILTER_LEN * FILTER_LEN] = { 0 };
+    pf[FILTER_LEN * FILTER_LEN / 2] = 1;
+    #endif
     #pragma unroll
     for (int i = 0; i < FILTER_LEN; ++i) {
         #pragma unroll
         for (int j = 0; j < FILTER_LEN; ++j) {
-            pix_dst.x += y_patch[localy + i][localx + j] * filters[i * FILTER_LEN + j];
+            pix_dst.x += y_patch[localy + i][localx + j] * pf[i * FILTER_LEN + j];
             if (IS_RGBA(dstchn)) {
-                pix_dst.y += cb_patch[localy + i][localx + j] * filters[i * FILTER_LEN + j];
-                pix_dst.z += cr_patch[localy + i][localx + j] * filters[i * FILTER_LEN + j];
+                pix_dst.y += cb_patch[localy + i][localx + j] * pf[i * FILTER_LEN + j];
+                pix_dst.z += cr_patch[localy + i][localx + j] * pf[i * FILTER_LEN + j];
             }
         }
     }
@@ -246,15 +257,15 @@ __kernel void raisr(read_only image2d_t src,
     pix_dst = clamp(pix_dst, 0.0h, 1.0h);
     
     if (IS_GRAY(dstchn)) {
-        write_imagef(dst, (int2)(dstx, dsty), convert_float4(pix_dst));
+        write_imagef(dst, (int2)(dstx, dsty), pix_dst);
     }
     else if (IS_RGBA(dstchn)) {
-        half4 rgba_dst;
+        float4 rgba_dst;
         rgba_dst.x = dot(csc_yuva2rgba[0], pix_dst);
         rgba_dst.y = dot(csc_yuva2rgba[1], pix_dst);
         rgba_dst.z = dot(csc_yuva2rgba[2], pix_dst);
         rgba_dst.w = 1.0h;
-        write_imagef(dst, (int2)(dstx, dsty), convert_float4(rgba_dst));
+        write_imagef(dst, (int2)(dstx, dsty), rgba_dst);
     }
 }
 
