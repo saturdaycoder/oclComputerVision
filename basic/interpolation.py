@@ -141,10 +141,8 @@ if __name__ == '__main__':
         linearCv2 = cv2.resize(bgra, (wnew, hnew), interpolation=cv2.INTER_LINEAR)
         profiling += time.time() - t1
         count += 1
-    psnrR = peak_signal_noise_ratio(linearCv2[:,:,2], linear2d[:,:,2])
-    psnrG = peak_signal_noise_ratio(linearCv2[:,:,1], linear2d[:,:,1])
-    psnrB = peak_signal_noise_ratio(linearCv2[:,:,0], linear2d[:,:,0])
-    print('linear: CV2 took {:.3f} ms, PSNR: R:{:.3f} G:{:.3f} B:{:.3f}'.format(profiling*1000/count, psnrR,psnrG,psnrB))
+    psnr = peak_signal_noise_ratio(linearCv2, linear2d, data_range=255)
+    print('linear: CV2 took {:.3f} ms, PSNR: {:.3f}'.format(profiling*1000/count, psnr))
     cv2.imwrite('linear-cv2.bmp', linearCv2)
 
     count = 0
@@ -161,10 +159,8 @@ if __name__ == '__main__':
         else:
             for i in range(len(elapsed_list)):
                 profiling[i] += elapsed_list[i]
-    psnrR = peak_signal_noise_ratio(linearCl[:,:,2], linear2d[:,:,2])
-    psnrG = peak_signal_noise_ratio(linearCl[:,:,1], linear2d[:,:,1])
-    psnrB = peak_signal_noise_ratio(linearCl[:,:,0], linear2d[:,:,0])
-    print('linear: CL-simple took {:.3f} ms, PSNR: R:{:.3f} G:{:.3f} B:{:.3f}, '.format(elapsed*1000/count,psnrR,psnrG,psnrB), end='')
+    psnr = peak_signal_noise_ratio(linearCl, linear2d, data_range=255)
+    print('linear: CL-simple took {:.3f} ms, PSNR: {:.3f}, '.format(elapsed*1000/count, psnr), end='')
     print('profiling: {:.3f} + {:.3f} + {:.3f} ms'.format(profiling[0]/count, profiling[1]/count, profiling[2]/count))
     cv2.imwrite('linear-simple.bmp', linearCl)
 
@@ -183,10 +179,8 @@ if __name__ == '__main__':
             for i in range(len(elapsed_list)):
                 profiling[i] += elapsed_list[i]
     t2 = time.time()
-    psnrR = peak_signal_noise_ratio(linearLDS[:,:,2], linear2d[:,:,2])
-    psnrG = peak_signal_noise_ratio(linearLDS[:,:,1], linear2d[:,:,1])
-    psnrB = peak_signal_noise_ratio(linearLDS[:,:,0], linear2d[:,:,0])
-    print('linear: CL-LDS took {:.3f} ms, PSNR: R:{:.3f} G:{:.3f} B:{:.3f}, '.format(elapsed*1000/count,psnrR,psnrG,psnrB), end='')
+    psnr = peak_signal_noise_ratio(linearLDS, linear2d, data_range=255)
+    print('linear: CL-LDS took {:.3f} ms, PSNR: {:.3f}, '.format(elapsed*1000/count, psnr), end='')
     print('profiling: {:.3f} + {:.3f} + {:.3f} ms'.format(profiling[0]/count, profiling[1]/count, profiling[2]/count))
     cv2.imwrite('linear-lds.bmp', linearLDS)
 
@@ -208,10 +202,8 @@ if __name__ == '__main__':
         cubicCv2 = cv2.resize(bgra, (wnew, hnew), interpolation=cv2.INTER_CUBIC)
         profiling += time.time() - t1
         count += 1
-    psnrR = peak_signal_noise_ratio(cubicCv2[:,:,2], cubic2d[:,:,2])
-    psnrG = peak_signal_noise_ratio(cubicCv2[:,:,1], cubic2d[:,:,1])
-    psnrB = peak_signal_noise_ratio(cubicCv2[:,:,0], cubic2d[:,:,0])
-    print('cubic: CV2 took {:.3f} ms, PSNR: R:{:.3f} G:{:.3f} B:{:.3f}'.format(profiling*1000/count, psnrR,psnrG,psnrB))
+    psnr = peak_signal_noise_ratio(cubicCv2, cubic2d, data_range=255)
+    print('cubic: CV2 took {:.3f} ms, PSNR: {:.3f}'.format(profiling*1000/count, psnr))
     cv2.imwrite('cubic-cv2.bmp', cubicCv2)
 
     count = 0
@@ -228,10 +220,8 @@ if __name__ == '__main__':
         else:
             for i in range(len(elapsed_list)):
                 profiling[i] += elapsed_list[i]
-    psnrR = peak_signal_noise_ratio(cubicCl[:,:,2], cubic2d[:,:,2])
-    psnrG = peak_signal_noise_ratio(cubicCl[:,:,1], cubic2d[:,:,1])
-    psnrB = peak_signal_noise_ratio(cubicCl[:,:,0], cubic2d[:,:,0])
-    print('cubic: CL-simple took {:.3f} ms, PSNR: R:{:.3f} G:{:.3f} B:{:.3f}, '.format(elapsed*1000/count,psnrR,psnrG,psnrB), end='')
+    psnr = peak_signal_noise_ratio(cubicCl, cubic2d, data_range=255)
+    print('cubic: CL-simple took {:.3f} ms, PSNR: {:.3f}, '.format(elapsed*1000/count, psnr), end='')
     print('profiling: {:.3f} + {:.3f} + {:.3f} ms'.format(profiling[0]/count, profiling[1]/count, profiling[2]/count))
     cv2.imwrite('cubic-simple.bmp', cubicCl)
 
@@ -250,10 +240,8 @@ if __name__ == '__main__':
             for i in range(len(elapsed_list)):
                 profiling[i] += elapsed_list[i]
     t2 = time.time()
-    psnrR = peak_signal_noise_ratio(cubicLDS[:,:,2], cubic2d[:,:,2])
-    psnrG = peak_signal_noise_ratio(cubicLDS[:,:,1], cubic2d[:,:,1])
-    psnrB = peak_signal_noise_ratio(cubicLDS[:,:,0], cubic2d[:,:,0])
-    print('cubic: CL-LDS took {:.3f} ms, PSNR: R:{:.3f} G:{:.3f} B:{:.3f}, '.format(elapsed*1000/count,psnrR,psnrG,psnrB), end='')
+    psnr = peak_signal_noise_ratio(cubicLDS, cubic2d, data_range=255)
+    print('cubic: CL-LDS took {:.3f} ms, PSNR: {:.3f}, '.format(elapsed*1000/count, psnr), end='')
     print('profiling: {:.3f} + {:.3f} + {:.3f} ms'.format(profiling[0]/count, profiling[1]/count, profiling[2]/count))
     cv2.imwrite('cubic-lds.bmp', cubicLDS)
 

@@ -1,12 +1,5 @@
 #pragma OPENCL EXTENSION  cl_khr_fp16 : enable
 
-__constant half4 cubic_matrix[4]={
-    (half4)(0, -1, 2, -1),
-    (half4)(2, 0, -5, 3),
-    (half4)(0, 1, 4, -3),
-    (half4)(0, 0, -1, 1)
-};
-
 __kernel void bilinear_simple(read_only image2d_t src,
                             write_only image2d_t dst)
 {
@@ -19,59 +12,6 @@ __kernel void bilinear_simple(read_only image2d_t src,
     sampler_t sampler = CLK_NORMALIZED_COORDS_TRUE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_LINEAR;
     float4 pix = read_imagef(src, sampler, norm_coord);
     write_imagef(dst, coord, pix);
-}
-
-__kernel void bicubic_simple(read_only image2d_t src,
-                            write_only image2d_t dst)
-{
-    int outx = get_global_id(0);
-    int outy = get_global_id(1);
-    int width_in = get_image_width(src);
-    int height_in = get_image_height(src);
-    int width_out = get_image_width(dst);
-    int height_out = get_image_height(dst);
-    int2 coord = (int2)(outx, outy);
-    int2 dst_size = (int2)(width_out, height_out);
-    int2 src_size = (int2)(width_in, height_in);
-    sampler_t sampler = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST;
-    float2 norm_coord = convert_float2(coord) / (float2)(width_out-1, height_out-1);
-    float2 coord_in = norm_coord * (float2)(width_in-1, height_in-1);
-    int x00 = floor(coord_in.x) - 1;
-    int y00 = floor(coord_in.y) - 1;
-    half4 pix_dst = (half4)(0.0h, 0.0h, 0.0h, 0.0h);
-
-    half u = coord_in.x - floor(coord_in.x);
-    half u2 = u * u;
-    half u3 = u2 * u;
-    half4 us = (half4)(1, u, u2, u3) * 0.5h;
-    half xweight[4] = {
-        dot(us, cubic_matrix[0]),
-        dot(us, cubic_matrix[1]),
-        dot(us, cubic_matrix[2]),
-        dot(us, cubic_matrix[3])
-    };
-    half v = coord_in.y - floor(coord_in.y);
-    half v2 = v * v;
-    half v3 = v2 * v;
-    half4 vs = (half4)(1, v, v2, v3) * 0.5h;
-    half yweight[4] = {
-        dot(vs, cubic_matrix[0]),
-        dot(vs, cubic_matrix[1]),
-        dot(vs, cubic_matrix[2]),
-        dot(vs, cubic_matrix[3])
-    };
-
-    #pragma unroll
-    for (int i = 0; i < 4; ++ i) {
-        #pragma unroll
-        for (int j = 0; j < 4; ++ j) {
-            int2 sampler_coord = (int2)(x00 + j, y00 + i);
-            half4 pix = convert_half4(read_imagef(src, sampler, sampler_coord));
-            pix_dst += pix * xweight[j] * yweight[i];
-        }
-    }
-    pix_dst = clamp(pix_dst, 0.0h, 1.0h);
-    write_imagef(dst, coord, convert_float4(pix_dst));
 }
 
 __kernel void bilinear_lds(read_only image2d_t src,
@@ -130,6 +70,65 @@ __kernel void bilinear_lds(read_only image2d_t src,
     write_imagef(dst, coord, convert_float4(pixout));
 }
 
+__constant half4 cubic_matrix[4]={
+    (half4)(0.0h, -0.5h, 1.0h, -0.5h),
+    (half4)(1.0h, 0.0h, -2.5h, 1.5h),
+    (half4)(0.0h, 0.5h, 2.0h, -1.5h),
+    (half4)(0.0h, 0.0h, -0.5h, 0.5h)
+};
+__kernel void bicubic_simple(read_only image2d_t src,
+                            write_only image2d_t dst)
+{
+    int outx = get_global_id(0);
+    int outy = get_global_id(1);
+    int width_in = get_image_width(src);
+    int height_in = get_image_height(src);
+    int width_out = get_image_width(dst);
+    int height_out = get_image_height(dst);
+    int2 coord = (int2)(outx, outy);
+    int2 dst_size = (int2)(width_out, height_out);
+    int2 src_size = (int2)(width_in, height_in);
+    sampler_t sampler = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST;
+    float2 norm_coord = convert_float2(coord) / (float2)(width_out-1, height_out-1);
+    float2 coord_in = norm_coord * (float2)(width_in-1, height_in-1);
+    int x00 = floor(coord_in.x) - 1;
+    int y00 = floor(coord_in.y) - 1;
+    half4 pix_dst = (half4)(0.0h, 0.0h, 0.0h, 0.0h);
+
+    half u = coord_in.x - floor(coord_in.x);
+    half u2 = u * u;
+    half u3 = u2 * u;
+    half4 us = (half4)(1, u, u2, u3);
+    half xweight[4] = {
+        dot(us, cubic_matrix[0]),
+        dot(us, cubic_matrix[1]),
+        dot(us, cubic_matrix[2]),
+        dot(us, cubic_matrix[3])
+    };
+    half v = coord_in.y - floor(coord_in.y);
+    half v2 = v * v;
+    half v3 = v2 * v;
+    half4 vs = (half4)(1, v, v2, v3);
+    half yweight[4] = {
+        dot(vs, cubic_matrix[0]),
+        dot(vs, cubic_matrix[1]),
+        dot(vs, cubic_matrix[2]),
+        dot(vs, cubic_matrix[3])
+    };
+
+    #pragma unroll
+    for (int i = 0; i < 4; ++ i) {
+        #pragma unroll
+        for (int j = 0; j < 4; ++ j) {
+            int2 sampler_coord = (int2)(x00 + j, y00 + i);
+            half4 pix = convert_half4(read_imagef(src, sampler, sampler_coord));
+            pix_dst += pix * xweight[j] * yweight[i];
+        }
+    }
+    pix_dst = clamp(pix_dst, 0.0h, 1.0h);
+    write_imagef(dst, coord, convert_float4(pix_dst));
+}
+
 __kernel void bicubic_lds(read_only image2d_t src,
                         write_only image2d_t dst)
 {
@@ -174,22 +173,22 @@ __kernel void bicubic_lds(read_only image2d_t src,
         /* calculate xweight into local memory */
         if (localy < 4) {
             int coordx = groupx * localw + localx;
-            half coordx_in = (half)coordx / (width_out - 1) * (width_in - 1);
+            float coordx_in = (float)coordx / (width_out - 1) * (width_in - 1);
             half u = coordx_in - floor(coordx_in);
             half u2 = u * u;
             half u3 = u2 * u;
-            half4 us = (half4)(1, u, u2, u3) * 0.5h;
+            half4 us = (half4)(1, u, u2, u3);
             l_xweight[localx][localy] = dot(us, cubic_matrix[localy]);
         }
 
         /* calculate yweight into local memory */
         if (localx < 4) {
             int coordy = groupy * localh + localy;
-            half coordy_in = (half)coordy / (height_out - 1) * (height_in - 1);
+            float coordy_in = (float)coordy / (height_out - 1) * (height_in - 1);
             half v = coordy_in - floor(coordy_in);
             half v2 = v * v;
             half v3 = v2 * v;
-            half4 vs = (half4)(1, v, v2, v3) * 0.5h;
+            half4 vs = (half4)(1, v, v2, v3);
             l_yweight[localy][localx] = dot(vs, cubic_matrix[localx]);
         }
     }
