@@ -16,40 +16,28 @@ def get_elapsed_ms(ev_list):
     return elapsed
 
 class ClRaisr:
-    workGroupSize = (16, 16)
-    cscRgba2yuvaBT601 = np.array([
-        0.299, 0.587, 0.114, 0.0,
-        -0.14713, -0.28886, 0.436, 0.5,
-        0.615, -0.51499, 0.10001, 0.5,
-        0.0, 0.0, 0.0, 1.0
+    workGroupSize = (8, 8)
+    cscRgb2yuv = np.array([
+        0.299, 0.587, 0.114, 0,
+        -0.14713, -0.28886, 0.436, 0,
+        0.615, -0.51499, -0.10001, 0,
+        0, 0, 0, 1
     ], dtype=np.float32)
-    cscYuva2rgbaBT601 = np.array([
-        1.0, 0.0, 1.13983, -1.13983 * 0.5,
-        1.0, -0.39465, -0.58060, (0.39465 + 0.58060) * 0.5,
-        1.0, 2.03211, 0.0, -2.03211 * 0.5,
-        0.0, 0.0, 0.0, 1.0
-    ], dtype=np.float32)
-    cscRgba2yuvaBT709 = np.array([
-        0.2126, 0.7152, 0.0722, 0.0,
-        -0.09991, -0.33609, 0.436, 0.5,
-        0.615, -0.55861, 0.05639, 0.5,
-        0.0, 0.0, 0.0, 1.0
-    ], dtype=np.float32)
-    cscYuva2rgbaBT709 = np.array([
-        1.0, 0.0, 1.28033, -1.28033 * 0.5,
-        1.0, -0.21482, -0.38059, (0.21482 + 0.38059) * 0.5,
-        1.0, 2.12798, 0.0, -2.12798 * 0.5,
-        0.0, 0.0, 0.0, 1.0
+    cscYuv2rgb = np.array([
+        1, 0, 1.13983, 0,
+        1, -0.39465, -0.58060, 0,
+        1, 2.03211, 0, 0,
+        0, 0, 0, 1
     ], dtype=np.float32)
     sobelX = np.array([
-        -1.0, 0.0, 1.0,
-        -2.0, 0.0, 2.0,
-        -1.0, 0.0, 1.0,
+        -1, 0, 1,
+        -2, 0, 2,
+        -1, 0, 1,
     ], dtype=np.float32)
     sobelY = np.array([
-        -1.0, -2.0, -1.0,
-        0.0, 0.0, 0.0,
-        1.0, 2.0, 1.0
+        -1, -2, -1,
+        0, 0, 0,
+        1, 2, 1
     ], dtype=np.float32)
     def gaussian2d(self, shape=(3,3),sigma=0.5):
         """
@@ -109,8 +97,8 @@ class ClRaisr:
 
         clSobelX = cl.Buffer(self.ctx, mf.READ_ONLY | mf.USE_HOST_PTR, hostbuf=self.sobelX)
         clSobelY = cl.Buffer(self.ctx, mf.READ_ONLY | mf.USE_HOST_PTR, hostbuf=self.sobelY)
-        clCscRgba2yuva = cl.Buffer(self.ctx, mf.READ_ONLY | mf.USE_HOST_PTR, hostbuf=self.cscRgba2yuvaBT601)
-        clCscYuva2rgba = cl.Buffer(self.ctx, mf.READ_ONLY | mf.USE_HOST_PTR, hostbuf=self.cscYuva2rgbaBT601)
+        clCscRgb2yuv = cl.Buffer(self.ctx, mf.READ_ONLY | mf.USE_HOST_PTR, hostbuf=self.cscRgb2yuv)
+        clCscYuv2rgb = cl.Buffer(self.ctx, mf.READ_ONLY | mf.USE_HOST_PTR, hostbuf=self.cscYuv2rgb)
         clGaussian = cl.Buffer(self.ctx, mf.READ_ONLY | mf.USE_HOST_PTR, hostbuf=self.gaussian)
         clFilters = cl.Buffer(self.ctx, mf.READ_ONLY | mf.USE_HOST_PTR, hostbuf=filters)
         npStreQuantizer = np.array([0.0001, 0.001], dtype=np.float32)
@@ -123,8 +111,8 @@ class ClRaisr:
             clDstImg, \
             clSobelX, \
             clSobelY, \
-            clCscRgba2yuva, \
-            clCscYuva2rgba, \
+            clCscRgb2yuv, \
+            clCscYuv2rgb, \
             clGaussian, \
             clStreQ, \
             clCoheQ, \
@@ -132,7 +120,7 @@ class ClRaisr:
             clFilters \
         )
         ev0 = cl.enqueue_copy(self.queue, clSrcImg, src, origin=(0, 0), region=(srcw, srch))
-        ev1 = cl.enqueue_nd_range_kernel(self.queue, self.kern, (dstw, dsth), (16, 16), wait_for=[ev0])
+        ev1 = cl.enqueue_nd_range_kernel(self.queue, self.kern, (dstw, dsth), (self.workGroupSize[1], self.workGroupSize[0]), wait_for=[ev0])
         ev2 = cl.enqueue_copy(self.queue, dst, clDstImg, origin=(0, 0), region=(dstw, dsth), wait_for=[ev1])
         ev2.wait()
 
@@ -144,26 +132,28 @@ if __name__ == '__main__':
 
     raisr = ClRaisr(imgGray)
 
-    bgr = cv2.imread('images/Set5/img_001_SRF_2_LR.png')
-    #bgr = cv2.resize(bgr, (1280, 720), interpolation=cv2.INTER_LINEAR)
+    refHR = cv2.imread('images/Set5/img_001_SRF_2_HR.png')
+    wHR = refHR.shape[1]
+    hHR = refHR.shape[0]
+    bgr = cv2.resize(refHR, (wHR//2, hHR//2))
+    #bgr = cv2.imread('images/Set5/img_001_SRF_2_LR.png')
     w = bgr.shape[1]
     h = bgr.shape[0]
-    wnew = 2 * w
-    hnew = 2 * h
-    refHR = cv2.imread('images/Set5/img_001_SRF_2_HR.png')
-    refUp = cv2.resize(bgr, (wnew, hnew), interpolation=cv2.INTER_CUBIC)
+    #wHR = 2 * w
+    #hHR = 2 * h
+    refUp = cv2.resize(bgr, (wHR, hHR), interpolation=cv2.INTER_LINEAR)
 
     loopcount = 20
     count = 0
 
     if imgGray == 1:
         ycrcb = cv2.cvtColor(bgr, cv2.COLOR_BGR2YCrCb)
-        ycrcb_dst = cv2.resize(ycrcb, (wnew, hnew), interpolation=cv2.INTER_LINEAR)
+        ycrcb_dst = cv2.resize(ycrcb, (wHR, hHR), interpolation=cv2.INTER_LINEAR)
         src = ycrcb[:,:,0].copy()
-        dst = np.zeros((hnew, wnew), dtype=src.dtype)
+        dst = np.zeros((hHR, wHR), dtype=src.dtype)
     else:
         src = cv2.cvtColor(bgr, cv2.COLOR_BGR2BGRA)
-        dst = np.zeros((hnew, wnew, 4), dtype=np.uint8)
+        dst = np.zeros((hHR, wHR, 4), dtype=np.uint8)
 
     elapsed_list = None
     while count < loopcount:
