@@ -16,7 +16,7 @@ def get_elapsed_ms(ev_list):
     return elapsed
 
 class ClRaisr:
-    workGroupSize = (8, 8)
+    workGroupSize = (16, 16)
     cscRgb2yuv = np.array([
         0.299, 0.587, 0.114, 0,
         -0.14713, -0.28886, 0.436, 0,
@@ -27,6 +27,12 @@ class ClRaisr:
         1, 0, 1.13983, 0,
         1, -0.39465, -0.58060, 0,
         1, 2.03211, 0, 0,
+        0, 0, 0, 1
+    ], dtype=np.float32)
+    cscYuv2yuv = np.array([
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
         0, 0, 0, 1
     ], dtype=np.float32)
     sobelX = np.array([
@@ -67,7 +73,7 @@ class ClRaisr:
                     filepath = os.path.split(os.path.realpath(__file__))[0]
                     with open(os.path.join(filepath, 'raisr.cl'), 'r') as f:
                         kernSrc = f.read()
-                        self.prg = cl.Program(self.ctx, kernSrc).build(options = ' -DGRAY_MODE={} -DWORK_GROUP_WIDTH={} -DWORK_GROUP_HEIGHT={} '.format(self.grayMode, self.workGroupSize[1], self.workGroupSize[0]))
+                        self.prg = cl.Program(self.ctx, kernSrc).build(options = ' -DWORK_GROUP_WIDTH={} -DWORK_GROUP_HEIGHT={} '.format(self.workGroupSize[1], self.workGroupSize[0]))
         with open(os.path.join(filepath, 'filter.p'), 'rb') as fp:
             self.filters_x2 = pickle.load(fp).astype(np.float32)
         
@@ -90,15 +96,17 @@ class ClRaisr:
         mf = cl.mem_flags
         if self.grayMode == 1:
             fmt = cl.ImageFormat(cl.channel_order.R, cl.channel_type.UNORM_INT8)
+            clCscToYuv = cl.Buffer(self.ctx, mf.READ_ONLY | mf.USE_HOST_PTR, hostbuf=self.cscYuv2yuv)
+            clCscFromYuv = cl.Buffer(self.ctx, mf.READ_ONLY | mf.USE_HOST_PTR, hostbuf=self.cscYuv2yuv)
         else:
             fmt = cl.ImageFormat(cl.channel_order.BGRA, cl.channel_type.UNORM_INT8)
+            clCscToYuv = cl.Buffer(self.ctx, mf.READ_ONLY | mf.USE_HOST_PTR, hostbuf=self.cscRgb2yuv)
+            clCscFromYuv = cl.Buffer(self.ctx, mf.READ_ONLY | mf.USE_HOST_PTR, hostbuf=self.cscYuv2rgb)
         clSrcImg = cl.Image(self.ctx, mf.READ_ONLY, fmt, shape=(srcw, srch))
         clDstImg = cl.Image(self.ctx, mf.WRITE_ONLY, fmt, shape=(dstw, dsth))
 
         clSobelX = cl.Buffer(self.ctx, mf.READ_ONLY | mf.USE_HOST_PTR, hostbuf=self.sobelX)
         clSobelY = cl.Buffer(self.ctx, mf.READ_ONLY | mf.USE_HOST_PTR, hostbuf=self.sobelY)
-        clCscRgb2yuv = cl.Buffer(self.ctx, mf.READ_ONLY | mf.USE_HOST_PTR, hostbuf=self.cscRgb2yuv)
-        clCscYuv2rgb = cl.Buffer(self.ctx, mf.READ_ONLY | mf.USE_HOST_PTR, hostbuf=self.cscYuv2rgb)
         clGaussian = cl.Buffer(self.ctx, mf.READ_ONLY | mf.USE_HOST_PTR, hostbuf=self.gaussian)
         clFilters = cl.Buffer(self.ctx, mf.READ_ONLY | mf.USE_HOST_PTR, hostbuf=filters)
         npStreQuantizer = np.array([0.0001, 0.001], dtype=np.float32)
@@ -111,8 +119,8 @@ class ClRaisr:
             clDstImg, \
             clSobelX, \
             clSobelY, \
-            clCscRgb2yuv, \
-            clCscYuv2rgb, \
+            clCscToYuv, \
+            clCscFromYuv, \
             clGaussian, \
             clStreQ, \
             clCoheQ, \
@@ -135,8 +143,8 @@ if __name__ == '__main__':
     refHR = cv2.imread('images/Set5/img_001_SRF_2_HR.png')
     wHR = refHR.shape[1]
     hHR = refHR.shape[0]
-    bgr = cv2.resize(refHR, (wHR//2, hHR//2))
-    #bgr = cv2.imread('images/Set5/img_001_SRF_2_LR.png')
+    #bgr = cv2.resize(refHR, (wHR//2, hHR//2))
+    bgr = cv2.imread('images/Set5/img_001_SRF_2_LR.png')
     w = bgr.shape[1]
     h = bgr.shape[0]
     #wHR = 2 * w
